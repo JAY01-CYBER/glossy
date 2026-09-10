@@ -114,6 +114,7 @@ import com.jay.glossy.constants.ShowFeaturedCarouselKey
 import com.jay.glossy.constants.UseFloatingNavBarKey
 import com.jay.glossy.constants.AppFont
 import com.jay.glossy.constants.SelectedFontKey
+import com.jay.glossy.constants.EnableCanvasKey
 import com.jay.glossy.ui.component.DefaultDialog
 import com.jay.glossy.ui.component.EnumDialog
 import com.jay.glossy.ui.component.IconButton
@@ -203,6 +204,13 @@ fun AppearanceSettings(
             HidePlayerThumbnailKey,
             defaultValue = false,
         )
+        
+    // 🚀 NEW: Canvas Toggle for Player Settings 🚀
+    val (enableCanvas, onEnableCanvasChange) = rememberPreference(
+        EnableCanvasKey,
+        defaultValue = true,
+    )
+    
     val (cropAlbumArt, onCropAlbumArtChange) =
         rememberPreference(
             CropAlbumArtKey,
@@ -1182,7 +1190,6 @@ fun AppearanceSettings(
                         ),
                     )
                     
-                    // NAYI SCREEN NAVIGATE KARNE WALA FONT OPTION
                     add(
                         Material3SettingsItem(
                             icon = painterResource(R.drawable.palette),
@@ -1332,6 +1339,30 @@ fun AppearanceSettings(
                         },
                         onClick = { onHidePlayerThumbnailChange(!hidePlayerThumbnail) },
                     ),
+                    
+                    // 🚀 NEW: Canvas Toggle added here under Player settings 🚀
+                    Material3SettingsItem(
+                        icon = painterResource(R.drawable.play),
+                        title = { Text("Show Canvas Videos") },
+                        description = { Text("Play looping background videos behind the player") },
+                        trailingContent = {
+                            Switch(
+                                checked = enableCanvas,
+                                onCheckedChange = onEnableCanvasChange,
+                                thumbContent = {
+                                    Icon(
+                                        painter = painterResource(
+                                            id = if (enableCanvas) R.drawable.check else R.drawable.close,
+                                        ),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(SwitchDefaults.IconSize),
+                                    )
+                                },
+                            )
+                        },
+                        onClick = { onEnableCanvasChange(!enableCanvas) },
+                    ),
+                    
                     Material3SettingsItem(
                         icon = painterResource(R.drawable.crop),
                         title = { Text(stringResource(R.string.crop_album_art)) },
