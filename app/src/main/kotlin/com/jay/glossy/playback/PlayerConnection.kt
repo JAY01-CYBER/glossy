@@ -1,5 +1,5 @@
 /**
- * Glossy Project (C) 2026
+ * Metrolist Project (C) 2026
  * Licensed under GPL-3.0 | See git history for contributors
  */
 
@@ -64,29 +64,29 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
-// GLOBAL CANVAS URL CACHE
 object CanvasUrlCache {
     private val cache = mutableMapOf<String, String>()
     fun get(key: String): String? = cache[key]
     fun put(key: String, url: String) { cache[key] = url }
 }
 
-//  TRUE VIDEO DISK CACHE SYSTEM (Like Spotify) 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 object CanvasPlayerCache {
     private var exoPlayer: ExoPlayer? = null
     private var currentUrl: String? = null
     private var simpleCache: SimpleCache? = null
+    private var currentMaxCacheSize: Long = 0L
 
-    fun getPlayer(context: Context, url: String): ExoPlayer {
-        // 1. Initialize Disk Cache (Saves video files to storage for instant load later)
-        if (simpleCache == null) {
+    fun getPlayer(context: Context, url: String, maxCacheSizeMb: Int): ExoPlayer {
+        val maxCacheBytes = maxCacheSizeMb * 1024 * 1024L
+        if (simpleCache == null || currentMaxCacheSize != maxCacheBytes) {
+            simpleCache?.release()
             val cacheDir = File(context.cacheDir, "canvas_video_cache")
-            val evictor = LeastRecentlyUsedCacheEvictor(200 * 1024 * 1024) // 200MB Max Cache
+            val evictor = LeastRecentlyUsedCacheEvictor(maxCacheBytes)
             simpleCache = SimpleCache(cacheDir, evictor, StandaloneDatabaseProvider(context))
+            currentMaxCacheSize = maxCacheBytes
         }
 
-        // 2. Initialize Player
         if (exoPlayer == null) {
             exoPlayer = ExoPlayer.Builder(context.applicationContext).build().apply {
                 setAudioAttributes(
@@ -102,7 +102,6 @@ object CanvasPlayerCache {
             }
         }
         
-        // 3. Play from Cache or Network
         if (url != currentUrl) {
             currentUrl = url
             
@@ -128,6 +127,7 @@ object CanvasPlayerCache {
         if (cacheDir.exists()) cacheDir.deleteRecursively()
         simpleCache?.release()
         simpleCache = null
+        currentMaxCacheSize = 0L
     }
 
     fun release() {
@@ -155,10 +155,10 @@ class PlayerConnection(
     private val isCanvasEnabled = MutableStateFlow(true)
 
     init {
-        // Observe Settings Toggle for Canvas
         scope.launch {
             context.dataStore.data.map { it[EnableCanvasKey] ?: true }.collect {
                 isCanvasEnabled.value = it
+                if (!it) currentCanvasUrl.value = null
             }
         }
     }
