@@ -201,7 +201,7 @@ android {
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION.21
     }
 
     kotlin {
@@ -363,6 +363,7 @@ dependencies {
     implementation(libs.media3.ui) 
     implementation(libs.media3.session)
     implementation(libs.media3.okhttp)
+    implementation(libs.media3.exoplayer.hls)
 
     // Google Cast - only included in GMS flavor (not available in F-Droid/FOSS builds)
     "gmsImplementation"(libs.media3.cast)
