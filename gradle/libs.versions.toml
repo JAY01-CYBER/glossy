@@ -86,6 +86,7 @@ kmpalette-core = { module = "com.kmpalette:kmpalette-core", version.ref = "kmpal
 kmpalette-extensions-network = { module = "com.kmpalette:extensions-network", version.ref = "kmpalette" }
 
 media3 = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
+media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3" }
 media3-okhttp = { module = "androidx.media3:media3-datasource-okhttp", version.ref = "media3" }
 media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
 media3-cast = { module = "androidx.media3:media3-cast", version.ref = "media3" }
@@ -121,7 +122,7 @@ kuromoji-ipadic = { module = "com.atilika.kuromoji:kuromoji-ipadic", version.ref
 tinypinyin = { module = "com.github.promeG:tinypinyin", version.ref = "tinypinyin" }
 protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }
 protobuf-kotlin-lite = { module = "com.google.protobuf:protobuf-kotlin-lite", version.ref = "protobuf" }
-glossycanvas-core = { module = "com.github.JAY01-CYBER.GlossyCanvas-Core:GlossyCanvas-Core", version.ref = "glossyCanvasCore" }
+glossycanvas-core = { module = "com.github.JAY01-CYBER.GlossyCanvas-Core:GlossyCanvas-Core-android", version.ref = "glossyCanvasCore" }
 
 [plugins]
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
