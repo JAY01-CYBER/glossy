@@ -1,5 +1,5 @@
 /**
- * Glossy Project (C) 2026
+ * Metrolist Project (C) 2026
  * Licensed under GPL-3.0 | See git history for contributors
  */
 
@@ -10,6 +10,7 @@ import com.jay.glossy.R
 import android.content.Context
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM
@@ -54,11 +55,49 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
-//  GLOBAL CANVAS URL CACHE 
+// 🚀 GLOBAL CANVAS URL & PLAYER CACHE (Zero UI Lag Solution) 🚀
 object CanvasUrlCache {
     private val cache = mutableMapOf<String, String>()
     fun get(key: String): String? = cache[key]
     fun put(key: String, url: String) { cache[key] = url }
+}
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+object CanvasPlayerCache {
+    private var exoPlayer: ExoPlayer? = null
+    private var currentUrl: String? = null
+
+    fun getPlayer(context: Context, url: String): ExoPlayer {
+        if (exoPlayer == null) {
+            exoPlayer = ExoPlayer.Builder(context.applicationContext).build().apply {
+                setAudioAttributes(
+                    androidx.media3.common.AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    false
+                )
+                volume = 0f
+                repeatMode = Player.REPEAT_MODE_ONE
+                playWhenReady = true // Always keep canvas playing even if paused
+            }
+        }
+        
+        // 🚀 Swap URL without rebuilding the player (Fixes UI Freezing)
+        if (url != currentUrl) {
+            currentUrl = url
+            val mimeType = if (url.lowercase().contains("mp4")) MimeTypes.VIDEO_MP4 else MimeTypes.APPLICATION_M3U8
+            exoPlayer?.setMediaItem(MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
+            exoPlayer?.prepare()
+        }
+        return exoPlayer!!
+    }
+
+    fun release() {
+        exoPlayer?.release()
+        exoPlayer = null
+        currentUrl = null
+    }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -75,7 +114,6 @@ class PlayerConnection(
     val service = binder.service
     private val playerReadinessFlow = service.isPlayerReady
 
-    // StateFlow to hold the current canvas URL for the UI
     val currentCanvasUrl = MutableStateFlow<String?>(null)
 
     private fun getPlayerSafe(): ExoPlayer {
@@ -232,7 +270,7 @@ class PlayerConnection(
         shuffleModeEnabled.value = newPlayer.shuffleModeEnabled
         repeatMode.value = newPlayer.repeatMode
         
-        prefetchCanvasUrls()
+        prefetchCanvasUrls() 
     }
 
     fun playQueue(queue: Queue) {
@@ -380,10 +418,10 @@ class PlayerConnection(
         val nextIndex = getPlayerOrNull()?.nextMediaItemIndex ?: C.INDEX_UNSET
         val nextItem = if (nextIndex != C.INDEX_UNSET) getPlayerOrNull()?.getMediaItemAt(nextIndex) else null
 
+        // 🚀 FIX: Instant Swap / URL cleanup to prevent bleeding previous canvas
         if (currentItem != null) {
             val mediaId = currentItem.mediaId
             val cachedUrl = CanvasUrlCache.get(mediaId)
-            // Instant swap: If cached, show it. If not, set null so UI hides previous video immediately.
             currentCanvasUrl.value = cachedUrl 
         } else {
             currentCanvasUrl.value = null
