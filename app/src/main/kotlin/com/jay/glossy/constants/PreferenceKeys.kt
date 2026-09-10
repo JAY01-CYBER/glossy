@@ -177,6 +177,10 @@ val MaxImageCacheSizeKey = intPreferencesKey("maxImageCacheSize")
 val MaxSongCacheSizeKey = intPreferencesKey("maxSongCacheSize")
 val EnableSongCacheKey = booleanPreferencesKey("enableSongCache")
 
+// 🚀 NEW: Canvas Cache Settings 🚀
+val EnableCanvasKey = booleanPreferencesKey("enableCanvas")
+val MaxCanvasCacheSizeKey = intPreferencesKey("maxCanvasCacheSize")
+
 val PauseListenHistoryKey = booleanPreferencesKey("pauseListenHistory")
 val PauseSearchHistoryKey = booleanPreferencesKey("pauseSearchHistory")
 val DisableScreenshotKey = booleanPreferencesKey("disableScreenshot")
