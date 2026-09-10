@@ -222,3 +222,7 @@
 ## KMPalette Rules
 -keep class com.kmpalette.** { *; }
 -dontwarn com.kmpalette.**
+
+## Glossy Canvas Core Rules
+-keep class com.j.glossycanvas.core.** { *; }
+-dontwarn com.j.glossycanvas.core.**
