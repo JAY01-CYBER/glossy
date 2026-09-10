@@ -1,5 +1,5 @@
 /**
- * Metrolist Project (C) 2026
+ * Glossy Project (C) 2026
  * Licensed under GPL-3.0 | See git history for contributors
  */
 
@@ -54,7 +54,7 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
-// 🚀 GLOBAL CANVAS URL CACHE (Accessible everywhere) 🚀
+//  GLOBAL CANVAS URL CACHE 
 object CanvasUrlCache {
     private val cache = mutableMapOf<String, String>()
     fun get(key: String): String? = cache[key]
@@ -75,7 +75,7 @@ class PlayerConnection(
     val service = binder.service
     private val playerReadinessFlow = service.isPlayerReady
 
-    // 🚀 NEW: StateFlow to hold the current canvas URL for the UI 🚀
+    // StateFlow to hold the current canvas URL for the UI
     val currentCanvasUrl = MutableStateFlow<String?>(null)
 
     private fun getPlayerSafe(): ExoPlayer {
@@ -232,7 +232,7 @@ class PlayerConnection(
         shuffleModeEnabled.value = newPlayer.shuffleModeEnabled
         repeatMode.value = newPlayer.repeatMode
         
-        prefetchCanvasUrls() // 🚀 Fetch Canvas immediately on player change
+        prefetchCanvasUrls()
     }
 
     fun playQueue(queue: Queue) {
@@ -372,26 +372,28 @@ class PlayerConnection(
         currentWindowIndex.value = player.getCurrentQueueIndex()
         updateCanSkipPreviousAndNext()
         
-        // 🚀 THE MAGIC: Prefetch Canvas for Current & Next Song when song changes!
         prefetchCanvasUrls()
     }
 
-    // 🚀 BACKGROUND PREFETCHING LOGIC 🚀
     private fun prefetchCanvasUrls() {
         val currentItem = getPlayerOrNull()?.currentMediaItem
         val nextIndex = getPlayerOrNull()?.nextMediaItemIndex ?: C.INDEX_UNSET
         val nextItem = if (nextIndex != C.INDEX_UNSET) getPlayerOrNull()?.getMediaItemAt(nextIndex) else null
 
+        if (currentItem != null) {
+            val mediaId = currentItem.mediaId
+            val cachedUrl = CanvasUrlCache.get(mediaId)
+            // Instant swap: If cached, show it. If not, set null so UI hides previous video immediately.
+            currentCanvasUrl.value = cachedUrl 
+        } else {
+            currentCanvasUrl.value = null
+        }
+
         scope.launch(Dispatchers.IO) {
-            // 1. Fetch & emit for Current Song (so UI updates instantly)
-            if (currentItem != null) {
+            if (currentItem != null && CanvasUrlCache.get(currentItem.mediaId) == null) {
                 val url = fetchCanvasUrl(currentItem)
                 currentCanvasUrl.value = url
-            } else {
-                currentCanvasUrl.value = null
             }
-
-            // 2. Silently prefetch & cache for Next Song
             if (nextItem != null) {
                 fetchCanvasUrl(nextItem)
             }
@@ -423,7 +425,7 @@ class PlayerConnection(
                 videoUrl = songCanvas?.preferredAnimationUrl
             }
             if (videoUrl != null) {
-                CanvasUrlCache.put(mediaId, videoUrl) // 🚀 Save to cache globally
+                CanvasUrlCache.put(mediaId, videoUrl) 
             }
             videoUrl
         } catch (e: Exception) {
@@ -448,7 +450,6 @@ class PlayerConnection(
         .orEmpty()
         .replace(Regex("\\s+"), " ")
         .trim()
-    // ----------------------------------------------------
 
     override fun onTimelineChanged(timeline: Timeline, reason: Int) {
         queueWindows.value = player.getQueueWindows()
@@ -463,7 +464,7 @@ class PlayerConnection(
         queueWindows.value = player.getQueueWindows()
         currentWindowIndex.value = player.getCurrentQueueIndex()
         updateCanSkipPreviousAndNext()
-        prefetchCanvasUrls() // Fetch if shuffle changes next song
+        prefetchCanvasUrls() 
     }
 
     override fun onRepeatModeChanged(mode: Int) {
