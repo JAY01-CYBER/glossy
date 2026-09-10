@@ -87,8 +87,6 @@ import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import com.j.glossycanvas.core.providers.MonochromeAlbumCanvas
-import com.j.glossycanvas.core.providers.MonochromeApiCanvas
 import com.jay.glossy.LocalListenTogetherManager
 import com.jay.glossy.LocalPlayerConnection
 import com.jay.glossy.R
@@ -109,48 +107,6 @@ import com.jay.glossy.utils.rememberPreference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import com.jay.glossy.playback.CanvasUrlCache
-
-//  STATIC CACHE: Global ExoPlayer Instance
-@Stable
-object CanvasPlayerCache {
-    private var exoPlayer: ExoPlayer? = null
-    private var currentUrl: String? = null
-
-    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    fun getPlayer(context: Context, url: String): ExoPlayer {
-        if (url == currentUrl && exoPlayer != null) {
-            return exoPlayer!!
-        }
-        
-        exoPlayer?.release()
-        currentUrl = url
-        
-        exoPlayer = ExoPlayer.Builder(context.applicationContext).build().apply {
-            setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build(),
-                false
-            )
-            volume = 0f
-            repeatMode = Player.REPEAT_MODE_ONE
-            playWhenReady = true // 🚀 Always True: Keeps playing when paused!
-            
-            val mimeType = if (url.lowercase().contains("mp4")) MimeTypes.VIDEO_MP4 else MimeTypes.APPLICATION_M3U8
-            setMediaItem(MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
-            prepare()
-        }
-        return exoPlayer!!
-    }
-
-    fun release() {
-        exoPlayer?.release()
-        exoPlayer = null
-        currentUrl = null
-    }
-}
 
 @Immutable
 data class ThumbnailDimensions(
@@ -476,7 +432,6 @@ fun Thumbnail(
                                         }
                                         val isActive = currentMedia?.mediaId == mediaMetadata?.id
                                         ThumbnailImage(
-                                            item = currentMedia,
                                             isActive = isActive,
                                             artworkUri = artworkUriToUse,
                                             cropArtwork = cropAlbumArt,
@@ -680,7 +635,6 @@ private fun ThumbnailItem(
                 }
 
                 ThumbnailImage(
-                    item = item,
                     isActive = isActive,
                     artworkUri = artworkUriToUse,
                     cropArtwork = cropAlbumArt,
@@ -720,12 +674,11 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- * no api call in ui
+ * 🚀 NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 🚀
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun ThumbnailImage(
-    item: MediaItem?,
     isActive: Boolean,
     artworkUri: String?,
     cropArtwork: Boolean,
@@ -738,14 +691,14 @@ private fun ThumbnailImage(
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
 
-
+    // 🚀 FIX 3: Safe Regex & 540p resolution (Prevents heavy load & grey box) 🚀
     val highResUri = remember(artworkUri) {
         if (artworkUri == null) return@remember null
         val isGoogleImage = artworkUri.contains("googleusercontent.com") || artworkUri.contains("ggpht.com")
         if (isGoogleImage) {
-            artworkUri.replace(Regex("=w\\d+-h\\d+.*"), "=w1080-h1080")
-                      .replace(Regex("-w\\d+-h\\d+.*"), "-w1080-h1080")
-                      .replace(Regex("=s\\d+.*"), "=w1080-h1080")
+            artworkUri.replace(Regex("=w\\d+-h\\d+.*"), "=w540-h540-l90-rj")
+                      .replace(Regex("-w\\d+-h\\d+.*"), "-w540-h540-l90-rj")
+                      .replace(Regex("=s\\d+.*"), "=w540-h540-l90-rj")
         } else {
             artworkUri
         }
@@ -765,6 +718,7 @@ private fun ThumbnailImage(
                 .memoryCachePolicy(CachePolicy.ENABLED)
                 .diskCachePolicy(CachePolicy.ENABLED)
                 .networkCachePolicy(CachePolicy.ENABLED)
+                .crossfade(true)
                 .build(),
             contentDescription = null,
             contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
@@ -773,10 +727,10 @@ private fun ThumbnailImage(
 
         if (canvasVideoUrl != null && isActive) {
             val exoPlayer = remember(canvasVideoUrl) {
-                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
+                com.jay.glossy.playback.CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
 
-    
+            // 🚀 FIX 1: LaunchedEffect DELETED. playWhenReady is ALWAYS TRUE in Cache.
 
             DisposableEffect(exoPlayer) {
                 val listener = object : Player.Listener {
