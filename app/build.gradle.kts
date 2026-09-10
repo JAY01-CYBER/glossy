@@ -201,7 +201,7 @@ android {
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION.21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     kotlin {
