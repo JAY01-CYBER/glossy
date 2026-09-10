@@ -9,11 +9,17 @@ package com.jay.glossy.ui.player
 
 import com.jay.glossy.R
 
+import android.content.Context
 import android.content.res.Configuration
+import android.view.ViewGroup
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.TextureView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -48,6 +54,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.Stable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -61,16 +68,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -82,8 +93,24 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import androidx.palette.graphics.Palette
 import coil3.compose.AsyncImage
+import coil3.imageLoader
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
+import coil3.request.crossfade
+import coil3.toBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.absoluteValue
+import kotlin.math.roundToInt
+
 import com.jay.glossy.LocalDatabase
 import com.jay.glossy.LocalListenTogetherManager
 import com.jay.glossy.LocalPlayerConnection
@@ -105,75 +132,13 @@ import com.jay.glossy.ui.utils.resize
 import com.jay.glossy.utils.joinToArtistString
 import com.jay.glossy.utils.rememberEnumPreference
 import com.jay.glossy.utils.rememberPreference
-import kotlinx.coroutines.launch
-import kotlin.math.absoluteValue
-import kotlin.math.roundToInt
 import com.jay.glossy.ui.component.Icon as MIcon
-import androidx.compose.ui.draw.blur
 import com.jay.glossy.constants.MiniPlayerBackgroundStyle
 import com.jay.glossy.constants.MiniPlayerBackgroundStyleKey
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.platform.LocalContext
-import androidx.palette.graphics.Palette
-import coil3.imageLoader
-import coil3.request.ImageRequest
-import coil3.request.allowHardware
-import coil3.toBitmap
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import com.jay.glossy.ui.theme.PlayerColorExtractor
 import com.jay.glossy.ui.component.LocalMenuState
 import com.jay.glossy.ui.menu.AddToPlaylistDialog
-
-// STATIC CACHE 1: Canvas URL
-@Stable
-object CanvasUrlCache {
-    private val cache = mutableMapOf<String, String>()
-    fun get(key: String): String? = cache[key]
-    fun put(key: String, url: String) { cache[key] = url }
-}
-
-// STATIC CACHE 2: Global ExoPlayer Instance (Prevents video restart on mini-player switch)
-@Stable
-object CanvasPlayerCache {
-    private var exoPlayer: androidx.media3.exoplayer.ExoPlayer? = null
-    private var currentUrl: String? = null
-
-    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    fun getPlayer(context: Context, url: String): androidx.media3.exoplayer.ExoPlayer {
-        if (url == currentUrl && exoPlayer != null) {
-            return exoPlayer!!
-        }
-        
-        exoPlayer?.release()
-        currentUrl = url
-        
-        exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(context.applicationContext).build().apply {
-            setAudioAttributes(
-                androidx.media3.common.AudioAttributes.Builder()
-                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
-                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build(),
-                false
-            )
-            volume = 0f
-            repeatMode = Player.REPEAT_MODE_ONE
-            playWhenReady = true
-            
-            val mimeType = if (url.lowercase().contains("mp4")) androidx.media3.common.MimeTypes.VIDEO_MP4 else androidx.media3.common.MimeTypes.APPLICATION_M3U8
-            setMediaItem(androidx.media3.common.MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
-            prepare()
-        }
-        return exoPlayer!!
-    }
-
-    fun release() {
-        exoPlayer?.release()
-        exoPlayer = null
-        currentUrl = null
-    }
-}
 
 /**
  * Stable wrapper for progress state - reads values only during draw phase
@@ -486,7 +451,7 @@ private fun NewMiniPlayer(
                         MaterialTheme.colorScheme.surfaceContainer,
                         MaterialTheme.colorScheme.surfaceContainer,
                     )
-                    // TODO: Replace with AnimatedMeshBackground from your app if available
+                    // Replace with AnimatedMeshBackground if available
                     Box(
                         Modifier
                             .fillMaxSize()
@@ -539,14 +504,16 @@ private fun NewMiniPlayer(
                 }
 
                 // Subscribe button - isolated composable
-                mediaMetadata?.artists?.firstOrNull()?.id?.let { artistId ->
-                    SubscribeButton(
-                        artistId = artistId,
-                        metadata = mediaMetadata,
-                        primaryColor = primaryColor,
-                        outlineColor = outlineColor,
-                        onSurfaceColor = onSurfaceColor,
-                    )
+                mediaMetadata?.let { metadata ->
+                    metadata.artists.firstOrNull()?.id?.let { artistId ->
+                        SubscribeButton(
+                            artistId = artistId,
+                            metadata = metadata,
+                            primaryColor = primaryColor,
+                            outlineColor = outlineColor,
+                            onSurfaceColor = onSurfaceColor,
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.width(8.dp))
@@ -615,7 +582,6 @@ private fun NewMiniPlayerPlayButton(
                 .size(48.dp)
                 .drawWithContent {
                     drawContent()
-                    // Draw progress arc - this reads progressState.progress during draw phase only
                     val progress = progressState.progress
                     val stroke = Stroke(width = strokeWidth.toPx(), cap = StrokeCap.Round)
                     val startAngle = -90f
@@ -623,7 +589,6 @@ private fun NewMiniPlayerPlayButton(
                     val diameter = size.minDimension
                     val topLeft = Offset((size.width - diameter) / 2, (size.height - diameter) / 2)
 
-                    // Draw track
                     drawArc(
                         color = trackColor,
                         startAngle = 0f,
@@ -633,7 +598,6 @@ private fun NewMiniPlayerPlayButton(
                         size = Size(diameter, diameter),
                         style = stroke,
                     )
-                    // Draw progress
                     drawArc(
                         color = primaryColor,
                         startAngle = startAngle,
@@ -645,7 +609,6 @@ private fun NewMiniPlayerPlayButton(
                     )
                 },
     ) {
-        // Thumbnail with play/pause overlay
         Box(
             contentAlignment = Alignment.Center,
             modifier =
@@ -668,10 +631,8 @@ private fun NewMiniPlayerPlayButton(
                         }
                     },
         ) {
-            val playerStyleName = "VIVI_NEW" // Assuming MODERN/VIVI_NEW context for MiniPlayer
+            val playerStyleName = "VIVI_NEW"
             
-            // 🚀 SEAMLESS CANVAS IN MINI PLAYER 🚀
-            // If we have a canvas video, it will play here seamlessly and persist!
             ThumbnailImage(
                 item = playerConnection.player.currentMediaItem,
                 isActive = true,
@@ -682,7 +643,6 @@ private fun NewMiniPlayerPlayButton(
                 modifier = Modifier.fillMaxSize().clip(CircleShape)
             )
 
-            // Overlay for paused state or muted (guest)
             if (isListenTogetherGuest && isMuted ||
                 (!isListenTogetherGuest && (!effectiveIsPlaying || playbackState == Player.STATE_ENDED))
             ) {
@@ -712,9 +672,6 @@ private fun NewMiniPlayerPlayButton(
     }
 }
 
-/**
- * Song info display - title and artist
- */
 @Composable
 private fun NewMiniPlayerSongInfo(
     mediaMetadata: MediaMetadata?,
@@ -799,7 +756,6 @@ private fun LegacyMiniPlayer(
     val swipeSensitivity by rememberPreference(SwipeSensitivityKey, 0.73f)
     val swipeThumbnailPref by rememberPreference(SwipeThumbnailKey, true)
 
-    // Disable swipe for Listen Together guests
     val listenTogetherManager = LocalListenTogetherManager.current
     val isListenTogetherGuest = listenTogetherManager?.let { it.isInRoom && !it.isHost } ?: false
     val swipeThumbnail = swipeThumbnailPref && !isListenTogetherGuest
@@ -910,7 +866,6 @@ private fun LegacyMiniPlayer(
                     }
                 },
     ) {
-        // Progress bar - uses drawWithContent to avoid recomposition
         Box(
             modifier =
                 Modifier
@@ -958,7 +913,6 @@ private fun LegacyMiniPlayer(
             }
         }
 
-        // Swipe indicator
         if (offsetXAnimatable.value.absoluteValue > 50f) {
             Box(
                 modifier =
@@ -1057,7 +1011,6 @@ private fun LegacyMiniMediaInfo(
                         .background(MaterialTheme.colorScheme.surfaceVariant),
             )
 
-            //  SEAMLESS CANVAS IN LEGACY MINI PLAYER 
             ThumbnailImage(
                 item = playerConnection.player.currentMediaItem,
                 isActive = true,
@@ -1115,10 +1068,6 @@ private fun LegacyMiniMediaInfo(
         }
     }
 }
-
-// ============================================================================
-// ISOLATED BUTTON COMPOSABLES - Prevent parent recomposition
-// ============================================================================
 
 @Composable
 private fun SubscribeButton(
@@ -1247,7 +1196,7 @@ private fun FavoriteButton(
 }
 
 /**
- * TextureView + Album Fallback + Caching (Global Player Cache prevents restart on mini-player switch)
+ * 🚀 NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 🚀
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
@@ -1261,52 +1210,16 @@ private fun ThumbnailImage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val playerConnection = LocalPlayerConnection.current ?: return
     
+    val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
+    var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
+
     val highResUri = remember(artworkUri) {
         artworkUri?.replace(Regex("=[wh]\\d+-[wh]\\d+.*"), "=w1080-h1080-l90-rj")
             ?.replace(Regex("-[wh]\\d+-[wh]\\d+.*"), "-w1080-h1080-l90-rj")
             ?.replace(Regex("=s\\d+.*"), "=s1080-l90-rj")
     } ?: artworkUri
-
-    var canvasVideoUrl by remember(item?.mediaId) { mutableStateOf(CanvasUrlCache.get(item?.mediaId ?: "")) }
-    var isVideoReady by remember(item?.mediaId) { mutableStateOf(false) }
-
-    LaunchedEffect(item?.mediaId) {
-        if (item == null || canvasVideoUrl != null) return@LaunchedEffect
-        val titleRaw = item.mediaMetadata.title?.toString() ?: ""
-        val artistRaw = item.mediaMetadata.artist?.toString() ?: ""
-        val albumRaw = item.mediaMetadata.albumTitle?.toString() ?: ""
-
-        val cleanTitle = normalizeCanvasSongTitle(titleRaw)
-        val cleanArtist = normalizeCanvasArtistName(artistRaw)
-
-        if (cleanTitle.isNotBlank()) {
-            withContext(Dispatchers.IO) {
-                try {
-                    var videoUrl: String? = null
-
-                    if (albumRaw.isNotBlank()) {
-                        val albumCanvas = com.j.glossycanvas.core.providers.MonochromeAlbumCanvas.getByAlbumArtist(albumRaw, cleanArtist)
-                        videoUrl = albumCanvas?.preferredAnimationUrl
-                    }
-
-                    if (videoUrl == null) {
-                        val songCanvas = com.j.glossycanvas.core.providers.MonochromeApiCanvas.getBySongArtist(cleanTitle, cleanArtist)
-                        videoUrl = songCanvas?.preferredAnimationUrl
-                    }
-
-                    if (videoUrl != null) {
-                        CanvasUrlCache.put(item.mediaId, videoUrl) 
-                        withContext(Dispatchers.Main) {
-                            canvasVideoUrl = videoUrl
-                        }
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-    }
 
     Box(
         modifier = modifier
@@ -1319,9 +1232,9 @@ private fun ThumbnailImage(
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(highResUri) 
-                .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
-                .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
-                .networkCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .networkCachePolicy(CachePolicy.ENABLED)
                 .crossfade(true)
                 .build(),
             contentDescription = null,
@@ -1330,13 +1243,10 @@ private fun ThumbnailImage(
         )
 
         if (canvasVideoUrl != null && isActive) {
-            
-            // Global Player Memory (CanvasPlayerCache)
             val exoPlayer = remember(canvasVideoUrl) {
                 CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
 
-            //  Sync playback state dynamically without LaunchedEffect restart
             LaunchedEffect(isPlaying) {
                 if (exoPlayer.playWhenReady != isPlaying) {
                     exoPlayer.playWhenReady = isPlaying
@@ -1361,22 +1271,22 @@ private fun ThumbnailImage(
                 label = "canvasFadeIn"
             )
 
-            androidx.compose.ui.viewinterop.AndroidView(
+            AndroidView(
                 factory = { viewContext ->
-                    androidx.media3.ui.PlayerView(viewContext).apply {
-                        layoutParams = android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                    PlayerView(viewContext).apply {
+                        layoutParams = ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
                         player = exoPlayer
                         useController = false
-                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                         setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
 
-                        val textureView = android.view.TextureView(viewContext).apply {
-                            layoutParams = android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                        val textureView = TextureView(viewContext).apply {
+                            layoutParams = ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
                             isOpaque = false
-                            tag = "CANVAS_TEXTURE_VIEW_MINI"
+                            tag = "CANVAS_TEXTURE_VIEW"
                         }
 
-                        val surfaceParent = this.videoSurfaceView?.parent as? android.view.ViewGroup
+                        val surfaceParent = this.videoSurfaceView?.parent as? ViewGroup
                         if (surfaceParent != null) {
                             val index = surfaceParent.indexOfChild(this.videoSurfaceView)
                             surfaceParent.removeView(this.videoSurfaceView)
@@ -1388,7 +1298,7 @@ private fun ThumbnailImage(
                 update = { view ->
                     if (view.player !== exoPlayer) {
                         view.player = exoPlayer
-                        view.findViewWithTag<android.view.TextureView>("CANVAS_TEXTURE_VIEW_MINI")?.let {
+                        view.findViewWithTag<TextureView>("CANVAS_TEXTURE_VIEW")?.let {
                             exoPlayer.setVideoTextureView(it)
                         }
                     }
