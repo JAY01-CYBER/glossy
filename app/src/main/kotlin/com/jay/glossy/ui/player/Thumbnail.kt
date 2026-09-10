@@ -87,8 +87,6 @@ import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import com.j.glossycanvas.core.providers.MonochromeAlbumCanvas
-import com.j.glossycanvas.core.providers.MonochromeApiCanvas
 import com.jay.glossy.LocalListenTogetherManager
 import com.jay.glossy.LocalPlayerConnection
 import com.jay.glossy.R
@@ -109,6 +107,48 @@ import com.jay.glossy.utils.rememberPreference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import com.jay.glossy.playback.CanvasUrlCache
+
+// 🚀 STATIC CACHE: Global ExoPlayer Instance
+@Stable
+object CanvasPlayerCache {
+    private var exoPlayer: ExoPlayer? = null
+    private var currentUrl: String? = null
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    fun getPlayer(context: Context, url: String): ExoPlayer {
+        if (url == currentUrl && exoPlayer != null) {
+            return exoPlayer!!
+        }
+        
+        exoPlayer?.release()
+        currentUrl = url
+        
+        exoPlayer = ExoPlayer.Builder(context.applicationContext).build().apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                false
+            )
+            volume = 0f
+            repeatMode = Player.REPEAT_MODE_ONE
+            playWhenReady = true
+            
+            val mimeType = if (url.lowercase().contains("mp4")) MimeTypes.VIDEO_MP4 else MimeTypes.APPLICATION_M3U8
+            setMediaItem(MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
+            prepare()
+        }
+        return exoPlayer!!
+    }
+
+    fun release() {
+        exoPlayer?.release()
+        exoPlayer = null
+        currentUrl = null
+    }
+}
 
 @Immutable
 data class ThumbnailDimensions(
@@ -197,7 +237,8 @@ private fun getTextColor(playerBackground: PlayerBackgroundStyle): Color {
     }
 }
 
-private fun normalizeCanvasSongTitle(raw: String): String = raw
+// Fixed visibility so MiniPlayer can use them
+internal fun normalizeCanvasSongTitle(raw: String): String = raw
     .replace(Regex("\\s*\\[[^]]*]"), "")
     .replace(Regex("\\s*\\((?:feat\\.?|ft\\.?|featuring|with)\\b[^)]*\\)", RegexOption.IGNORE_CASE), "")
     .replace(Regex("\\s*\\((?:from|official\\s*)?(?:music\\s*)?(?:video|mv|lyrics?|audio|visualizer|live|remaster(?:ed)?|version|edit|mix|remix)[^)]*\\)", RegexOption.IGNORE_CASE), "")
@@ -207,7 +248,7 @@ private fun normalizeCanvasSongTitle(raw: String): String = raw
     .trim('-')
     .trim()
 
-private fun normalizeCanvasArtistName(raw: String): String = raw
+internal fun normalizeCanvasArtistName(raw: String): String = raw
     .split(Regex("(?:\\s*,\\s*|\\s*&\\s*|\\s+×\\s+|\\s+x\\s+|\\bfeat\\.?\\b|\\bft\\.?\\b|\\bfeaturing\\b|\\bwith\\b)", RegexOption.IGNORE_CASE), limit = 2)
     .firstOrNull()
     .orEmpty()
@@ -683,7 +724,7 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- * 🚀 TextureView + Album Fallback + Caching + High-Res Image (No more grey box or delays) 🚀
+ * 🚀 NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 🚀
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
@@ -697,54 +738,16 @@ private fun ThumbnailImage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val playerConnection = LocalPlayerConnection.current ?: return
     
-    // FIX 1: YouTube Music URL को जबरदस्ती 1080p High-Res में कन्वर्ट करता है ताकि Coil फेल न हो
+    val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
+    var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
+
     val highResUri = remember(artworkUri) {
         artworkUri?.replace(Regex("=[wh]\\d+-[wh]\\d+.*"), "=w1080-h1080-l90-rj")
             ?.replace(Regex("-[wh]\\d+-[wh]\\d+.*"), "-w1080-h1080-l90-rj")
             ?.replace(Regex("=s\\d+.*"), "=s1080-l90-rj")
     } ?: artworkUri
-
-    // FIX 3: URL Cache से तुरंत लिंक उठाता है
-    var canvasVideoUrl by remember(item?.mediaId) { mutableStateOf(CanvasUrlCache.get(item?.mediaId ?: "")) }
-    var isVideoReady by remember(item?.mediaId) { mutableStateOf(false) }
-
-    LaunchedEffect(item?.mediaId) {
-        if (item == null || canvasVideoUrl != null) return@LaunchedEffect
-        val titleRaw = item.mediaMetadata.title?.toString() ?: ""
-        val artistRaw = item.mediaMetadata.artist?.toString() ?: ""
-        val albumRaw = item.mediaMetadata.albumTitle?.toString() ?: ""
-
-        val cleanTitle = normalizeCanvasSongTitle(titleRaw)
-        val cleanArtist = normalizeCanvasArtistName(artistRaw)
-
-        if (cleanTitle.isNotBlank()) {
-            withContext(Dispatchers.IO) {
-                try {
-                    var videoUrl: String? = null
-
-                    if (albumRaw.isNotBlank()) {
-                        val albumCanvas = MonochromeAlbumCanvas.getByAlbumArtist(albumRaw, cleanArtist)
-                        videoUrl = albumCanvas?.preferredAnimationUrl
-                    }
-
-                    if (videoUrl == null) {
-                        val songCanvas = MonochromeApiCanvas.getBySongArtist(cleanTitle, cleanArtist)
-                        videoUrl = songCanvas?.preferredAnimationUrl
-                    }
-
-                    if (videoUrl != null) {
-                        CanvasUrlCache.put(item.mediaId, videoUrl) 
-                        withContext(Dispatchers.Main) {
-                            canvasVideoUrl = videoUrl
-                        }
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-    }
 
     Box(
         modifier = modifier
@@ -754,7 +757,6 @@ private fun ThumbnailImage(
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
-        // Base Album Artwork
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(highResUri) 
@@ -768,14 +770,11 @@ private fun ThumbnailImage(
             modifier = Modifier.fillMaxSize()
         )
 
-        // TextureView Canvas Player Layer
         if (canvasVideoUrl != null && isActive) {
-            
             val exoPlayer = remember(canvasVideoUrl) {
                 CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
 
-            // Sync playback state dynamically without LaunchedEffect restart
             LaunchedEffect(isPlaying) {
                 if (exoPlayer.playWhenReady != isPlaying) {
                     exoPlayer.playWhenReady = isPlaying
@@ -791,7 +790,6 @@ private fun ThumbnailImage(
                 exoPlayer.addListener(listener)
                 onDispose {
                     exoPlayer.removeListener(listener)
-                    // 🚀 exoPlayer.release() हटा दिया गया है ताकि प्लेयर बैकग्राउंड में ज़िंदा रहे
                 }
             }
 
@@ -813,7 +811,7 @@ private fun ThumbnailImage(
                         val textureView = TextureView(viewContext).apply {
                             layoutParams = ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
                             isOpaque = false
-                            tag = "CANVAS_TEXTURE_VIEW_FULL"
+                            tag = "CANVAS_TEXTURE_VIEW"
                         }
 
                         val surfaceParent = this.videoSurfaceView?.parent as? ViewGroup
@@ -828,8 +826,7 @@ private fun ThumbnailImage(
                 update = { view ->
                     if (view.player !== exoPlayer) {
                         view.player = exoPlayer
-                        // जब UI नया बनता है, तो प्लेयर को नया सरफेस (TextureView) असाइन कर दो
-                        view.findViewWithTag<TextureView>("CANVAS_TEXTURE_VIEW_FULL")?.let {
+                        view.findViewWithTag<TextureView>("CANVAS_TEXTURE_VIEW")?.let {
                             exoPlayer.setVideoTextureView(it)
                         }
                     }
