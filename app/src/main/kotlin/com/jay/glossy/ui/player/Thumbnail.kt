@@ -38,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -68,9 +69,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
@@ -91,7 +96,10 @@ import com.jay.glossy.listentogether.RoomRole
 import com.jay.glossy.ui.component.CastButton
 import com.jay.glossy.utils.rememberEnumPreference
 import com.jay.glossy.utils.rememberPreference
+import com.j.glossycanvas.core.providers.MonochromeApiCanvas
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * Pre-calculated thumbnail dimensions to avoid repeated calculations during recomposition.
@@ -462,7 +470,10 @@ fun Thumbnail(
                                         } else {
                                             currentMedia?.mediaMetadata?.artworkUri?.toString()
                                         }
+                                        val isActive = currentMedia?.mediaId == mediaMetadata?.id
                                         ThumbnailImage(
+                                            item = currentMedia,
+                                            isActive = isActive,
                                             artworkUri = artworkUriToUse,
                                             cropArtwork = cropAlbumArt,
                                             playerStyleName = playerStyle.name
@@ -494,8 +505,10 @@ fun Thumbnail(
                                     item.mediaId.ifEmpty { "unknown_${item.hashCode()}" }
                                 }
                             ) { item ->
+                                val isActive = item.mediaId == mediaMetadata?.id
                                 ThumbnailItem(
                                     item = item,
+                                    isActive = isActive,
                                     dimensions = dimensions,
                                     hidePlayerThumbnail = hidePlayerThumbnail,
                                     cropAlbumArt = cropAlbumArt,
@@ -598,6 +611,7 @@ private fun ThumbnailHeader(
 @Composable
 private fun ThumbnailItem(
     item: MediaItem,
+    isActive: Boolean,
     dimensions: ThumbnailDimensions,
     hidePlayerThumbnail: Boolean,
     cropAlbumArt: Boolean,
@@ -683,6 +697,8 @@ private fun ThumbnailItem(
                 }
 
                 ThumbnailImage(
+                    item = item,
+                    isActive = isActive,
                     artworkUri = artworkUriToUse,
                     cropArtwork = cropAlbumArt,
                     playerStyleName = playerStyleName
@@ -727,40 +743,98 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- * Actual thumbnail image with caching and hardware layer rendering.
+ * Enhanced Thumbnail image with GlossyCanvas-Core integration and hardware layer rendering.
+ * Renders ExoPlayer Video if Canvas API returns a valid URL, otherwise falls back to AsyncImage.
  */
 @Composable
 private fun ThumbnailImage(
+    item: MediaItem?,
+    isActive: Boolean,
     artworkUri: String?,
     cropArtwork: Boolean,
     playerStyleName: String,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    var canvasVideoUrl by remember(item?.mediaId) { mutableStateOf<String?>(null) }
+    
+    // Background execution to fetch Canvas URL
+    LaunchedEffect(item?.mediaId) {
+        if (item == null) return@LaunchedEffect
+        val title = item.mediaMetadata.title?.toString()
+        val artist = item.mediaMetadata.artist?.toString() ?: ""
+        
+        if (!title.isNullOrBlank()) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val canvasData = MonochromeApiCanvas.getBySongArtist(
+                        song = title,
+                        artist = artist
+                    )
+                    canvasVideoUrl = canvasData?.preferredAnimationUrl
+                } catch(e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .graphicsLayer {
-                // Use offscreen compositing for hardware acceleration during animations
                 compositingStrategy = CompositingStrategy.Offscreen
             }
             .then(
-                // Remove surfaceVariant color (grey) for VIVI_NEW to avoid ugly borders
                 if (playerStyleName == "VIVI_NEW") Modifier 
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(artworkUri)
-                .memoryCachePolicy(CachePolicy.ENABLED)
-                .diskCachePolicy(CachePolicy.ENABLED)
-                .networkCachePolicy(CachePolicy.ENABLED)
-                .crossfade(true)
-                .build(),
-            contentDescription = null,
-            contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
-            modifier = Modifier.fillMaxSize()
-        )
+        // Show Video if URL is available AND the item is currently active
+        if (canvasVideoUrl != null && isActive) {
+            val exoPlayer = remember(context) {
+                ExoPlayer.Builder(context).build().apply {
+                    repeatMode = Player.REPEAT_MODE_ALL
+                    volume = 0f // Make sure Canvas is muted!
+                }
+            }
+
+            LaunchedEffect(canvasVideoUrl) {
+                exoPlayer.setMediaItem(MediaItem.fromUri(canvasVideoUrl!!))
+                exoPlayer.prepare()
+                exoPlayer.playWhenReady = true
+            }
+
+            DisposableEffect(exoPlayer) {
+                onDispose { exoPlayer.release() }
+            }
+
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        useController = false
+                        player = exoPlayer
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            // Fallback Album Artwork
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(artworkUri)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .diskCachePolicy(CachePolicy.ENABLED)
+                    .networkCachePolicy(CachePolicy.ENABLED)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
 
