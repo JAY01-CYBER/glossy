@@ -363,8 +363,6 @@ fun Thumbnail(
                         textColor = textBackgroundColor,
                         playerStyleName = playerStyle.name
                     )
-                    
-                    // Spacer REMOVED from below header so Album art spacing matches Modern style
                 }
                 
                 // Thumbnail content
@@ -402,7 +400,6 @@ fun Thumbnail(
                         var skipMultiplier by remember { mutableIntStateOf(1) }
                         var lastTapTime by remember { mutableLongStateOf(0L) }
 
-                        // WRAPPER BOX forces Perfect centering of the square, perfectly replicating Modern style
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center 
@@ -411,7 +408,7 @@ fun Thumbnail(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = PlayerHorizontalPadding)
-                                    .aspectRatio(1f) // Perfect square aspect ratio
+                                    .aspectRatio(1f)
                                     .pointerInput(swipeThumbnail) {
                                         if (!swipeThumbnail) return@pointerInput
                                         var totalDrag = 0f
@@ -574,7 +571,6 @@ private fun ThumbnailHeader(
                 .align(Alignment.Center)
                 .padding(horizontal = 48.dp)
         ) {
-            // Listen Together indicator
             if (listenTogetherRoleState?.value != RoomRole.NONE) {
                 Text(
                     text = if (listenTogetherRoleState?.value == RoomRole.HOST) "Hosting Listen Together" else "Listening Together",
@@ -589,7 +585,6 @@ private fun ThumbnailHeader(
                 )
             }
             
-            // Subtitle - Hide only for VIVI_NEW
             val playingFrom = queueTitle ?: albumTitle
             if (playerStyleName != "VIVI_NEW" && !playingFrom.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -705,7 +700,6 @@ private fun ThumbnailItem(
                 )
             }
             
-            // Cast button at top-right corner of thumbnail
             CastButton(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -743,8 +737,7 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- * Enhanced Thumbnail image with GlossyCanvas-Core integration and hardware layer rendering.
- * Renders ExoPlayer Video if Canvas API returns a valid URL, otherwise falls back to AsyncImage.
+ * Enhanced Thumbnail image with GlossyCanvas-Core integration, ExoPlayer, and DEBUG STATUS.
  */
 @Composable
 private fun ThumbnailImage(
@@ -757,7 +750,11 @@ private fun ThumbnailImage(
 ) {
     val context = LocalContext.current
     var canvasVideoUrl by remember(item?.mediaId) { mutableStateOf<String?>(null) }
+    var isVideoError by remember(item?.mediaId) { mutableStateOf(false) }
     
+    // DEBUG STATE - स्क्रीन पर एरर देखने के लिए
+    var debugStatus by remember(item?.mediaId) { mutableStateOf("⏳ Wait...") }
+
     // Background execution to fetch Canvas URL
     LaunchedEffect(item?.mediaId) {
         if (item == null) return@LaunchedEffect
@@ -765,15 +762,27 @@ private fun ThumbnailImage(
         val artist = item.mediaMetadata.artist?.toString() ?: ""
         
         if (!title.isNullOrBlank()) {
+            debugStatus = "🔍 $title"
             withContext(Dispatchers.IO) {
                 try {
                     val canvasData = MonochromeApiCanvas.getBySongArtist(
                         song = title,
                         artist = artist
                     )
-                    canvasVideoUrl = canvasData?.preferredAnimationUrl
+                    val url = canvasData?.preferredAnimationUrl
+                    
+                    withContext(Dispatchers.Main) {
+                        if (url != null) {
+                            debugStatus = "✅ URL Found!"
+                            canvasVideoUrl = url
+                        } else {
+                            debugStatus = "❌ No Canvas API"
+                        }
+                    }
                 } catch(e: Exception) {
-                    e.printStackTrace()
+                    withContext(Dispatchers.Main) {
+                        debugStatus = "⚠️ API Error"
+                    }
                 }
             }
         }
@@ -782,27 +791,37 @@ private fun ThumbnailImage(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .graphicsLayer {
-                compositingStrategy = CompositingStrategy.Offscreen
-            }
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .then(
                 if (playerStyleName == "VIVI_NEW") Modifier 
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
-        // Show Video if URL is available AND the item is currently active
-        if (canvasVideoUrl != null && isActive) {
+        if (canvasVideoUrl != null && isActive && !isVideoError) {
             val exoPlayer = remember(context) {
                 ExoPlayer.Builder(context).build().apply {
                     repeatMode = Player.REPEAT_MODE_ALL
-                    volume = 0f // Make sure Canvas is muted!
+                    volume = 0f
+                    
+                    addListener(object : Player.Listener {
+                        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                            debugStatus = "🎥 Error ${error.errorCode}"
+                            isVideoError = true
+                        }
+                    })
                 }
             }
 
             LaunchedEffect(canvasVideoUrl) {
-                exoPlayer.setMediaItem(MediaItem.fromUri(canvasVideoUrl!!))
-                exoPlayer.prepare()
-                exoPlayer.playWhenReady = true
+                try {
+                    exoPlayer.setMediaItem(MediaItem.fromUri(canvasVideoUrl!!))
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                    debugStatus = "▶️ Playing"
+                } catch (e: Exception) {
+                    debugStatus = "🎥 Setup Error"
+                    isVideoError = true
+                }
             }
 
             DisposableEffect(exoPlayer) {
@@ -821,7 +840,6 @@ private fun ThumbnailImage(
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            // Fallback Album Artwork
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(artworkUri)
@@ -833,6 +851,22 @@ private fun ThumbnailImage(
                 contentDescription = null,
                 contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()
+            )
+        }
+        
+        // DEBUG UI: एल्बम आर्ट के कोने में एक छोटा सा ब्लैक बॉक्स दिखेगा
+        // इसे केवल Active गाने के लिए दिखा रहे हैं ताकि UI भरा-भरा ना लगे।
+        if (isActive) {
+            Text(
+                text = debugStatus,
+                color = Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                    .padding(6.dp)
             )
         }
     }
