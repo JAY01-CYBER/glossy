@@ -126,6 +126,55 @@ import com.jay.glossy.ui.theme.PlayerColorExtractor
 import com.jay.glossy.ui.component.LocalMenuState
 import com.jay.glossy.ui.menu.AddToPlaylistDialog
 
+// STATIC CACHE 1: Canvas URL
+@Stable
+object CanvasUrlCache {
+    private val cache = mutableMapOf<String, String>()
+    fun get(key: String): String? = cache[key]
+    fun put(key: String, url: String) { cache[key] = url }
+}
+
+// STATIC CACHE 2: Global ExoPlayer Instance (Prevents video restart on mini-player switch)
+@Stable
+object CanvasPlayerCache {
+    private var exoPlayer: androidx.media3.exoplayer.ExoPlayer? = null
+    private var currentUrl: String? = null
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    fun getPlayer(context: Context, url: String): androidx.media3.exoplayer.ExoPlayer {
+        if (url == currentUrl && exoPlayer != null) {
+            return exoPlayer!!
+        }
+        
+        exoPlayer?.release()
+        currentUrl = url
+        
+        exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(context.applicationContext).build().apply {
+            setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                false
+            )
+            volume = 0f
+            repeatMode = Player.REPEAT_MODE_ONE
+            playWhenReady = true
+            
+            val mimeType = if (url.lowercase().contains("mp4")) androidx.media3.common.MimeTypes.VIDEO_MP4 else androidx.media3.common.MimeTypes.APPLICATION_M3U8
+            setMediaItem(androidx.media3.common.MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
+            prepare()
+        }
+        return exoPlayer!!
+    }
+
+    fun release() {
+        exoPlayer?.release()
+        exoPlayer = null
+        currentUrl = null
+    }
+}
+
 /**
  * Stable wrapper for progress state - reads values only during draw phase
  * This prevents recomposition when position/duration change
@@ -437,10 +486,13 @@ private fun NewMiniPlayer(
                         MaterialTheme.colorScheme.surfaceContainer,
                         MaterialTheme.colorScheme.surfaceContainer,
                     )
-                    AnimatedMeshBackground(
-                        colors = colors,
-                        modifier = Modifier
+                    // TODO: Replace with AnimatedMeshBackground from your app if available
+                    Box(
+                        Modifier
                             .fillMaxSize()
+                            .background(
+                                Brush.horizontalGradient(colors)
+                            )
                             .background(Color.Black.copy(alpha = 0.2f))
                     )
                 }
@@ -490,7 +542,7 @@ private fun NewMiniPlayer(
                 mediaMetadata?.artists?.firstOrNull()?.id?.let { artistId ->
                     SubscribeButton(
                         artistId = artistId,
-                        metadata = mediaMetadata!!,
+                        metadata = mediaMetadata,
                         primaryColor = primaryColor,
                         outlineColor = outlineColor,
                         onSurfaceColor = onSurfaceColor,
@@ -616,18 +668,19 @@ private fun NewMiniPlayerPlayButton(
                         }
                     },
         ) {
-            mediaMetadata?.let { metadata ->
-                val thumbnailUrl =
-                    remember(metadata.thumbnailUrl) {
-                        metadata.thumbnailUrl?.resize(120, 120)
-                    }
-                AsyncImage(
-                    model = thumbnailUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                )
-            }
+            val playerStyleName = "VIVI_NEW" // Assuming MODERN/VIVI_NEW context for MiniPlayer
+            
+            // 🚀 SEAMLESS CANVAS IN MINI PLAYER 🚀
+            // If we have a canvas video, it will play here seamlessly and persist!
+            ThumbnailImage(
+                item = playerConnection.player.currentMediaItem,
+                isActive = true,
+                isPlaying = effectiveIsPlaying,
+                artworkUri = mediaMetadata?.thumbnailUrl,
+                cropArtwork = true,
+                playerStyleName = playerStyleName,
+                modifier = Modifier.fillMaxSize().clip(CircleShape)
+            )
 
             // Overlay for paused state or muted (guest)
             if (isListenTogetherGuest && isMuted ||
@@ -983,6 +1036,8 @@ private fun LegacyMiniMediaInfo(
 ) {
     val error by LocalPlayerConnection.current?.error?.collectAsState() ?: remember { mutableStateOf(null) }
     val cropAlbumArt by rememberPreference(CropAlbumArtKey, false)
+    val playerConnection = LocalPlayerConnection.current ?: return
+    val isPlaying by playerConnection.isPlaying.collectAsState()
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -1002,18 +1057,15 @@ private fun LegacyMiniMediaInfo(
                         .background(MaterialTheme.colorScheme.surfaceVariant),
             )
 
-            val thumbnailUrl =
-                remember(mediaMetadata.thumbnailUrl) {
-                    mediaMetadata.thumbnailUrl?.resize(144, 144)
-                }
-            AsyncImage(
-                model = thumbnailUrl,
-                contentDescription = null,
-                contentScale = if (cropAlbumArt) ContentScale.Crop else ContentScale.Fit,
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(ThumbnailCornerRadius)),
+            //  SEAMLESS CANVAS IN LEGACY MINI PLAYER 
+            ThumbnailImage(
+                item = playerConnection.player.currentMediaItem,
+                isActive = true,
+                isPlaying = isPlaying,
+                artworkUri = mediaMetadata.thumbnailUrl,
+                cropArtwork = cropAlbumArt,
+                playerStyleName = "LEGACY",
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(ThumbnailCornerRadius))
             )
 
             androidx.compose.animation.AnimatedVisibility(visible = error != null, enter = fadeIn(), exit = fadeOut()) {
@@ -1079,7 +1131,6 @@ private fun SubscribeButton(
     val database = LocalDatabase.current
     val libraryArtist by database.artist(artistId).collectAsStateWithLifecycle(initialValue = null)
     val isSubscribed = libraryArtist?.artist?.bookmarkedAt != null
-
 
     Box(
         contentAlignment = Alignment.Center,
@@ -1168,7 +1219,6 @@ private fun FavoriteButton(
     val database = LocalDatabase.current
     val playerConnection = LocalPlayerConnection.current ?: return
     val librarySong by database.song(songId).collectAsStateWithLifecycle(initialValue = null)
-    // For episodes, show saved state (inLibrary); for songs, show liked state
     val isEpisode = librarySong?.song?.isEpisode == true
     val isLiked = if (isEpisode) librarySong?.song?.inLibrary != null else librarySong?.song?.liked == true
 
@@ -1193,5 +1243,160 @@ private fun FavoriteButton(
             tint = if (isLiked) errorColor else onSurfaceColor.copy(alpha = 0.7f),
             modifier = Modifier.size(20.dp),
         )
+    }
+}
+
+/**
+ * TextureView + Album Fallback + Caching (Global Player Cache prevents restart on mini-player switch)
+ */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+private fun ThumbnailImage(
+    item: androidx.media3.common.MediaItem?,
+    isActive: Boolean,
+    isPlaying: Boolean,
+    artworkUri: String?,
+    cropArtwork: Boolean,
+    playerStyleName: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    
+    val highResUri = remember(artworkUri) {
+        artworkUri?.replace(Regex("=[wh]\\d+-[wh]\\d+.*"), "=w1080-h1080-l90-rj")
+            ?.replace(Regex("-[wh]\\d+-[wh]\\d+.*"), "-w1080-h1080-l90-rj")
+            ?.replace(Regex("=s\\d+.*"), "=s1080-l90-rj")
+    } ?: artworkUri
+
+    var canvasVideoUrl by remember(item?.mediaId) { mutableStateOf(CanvasUrlCache.get(item?.mediaId ?: "")) }
+    var isVideoReady by remember(item?.mediaId) { mutableStateOf(false) }
+
+    LaunchedEffect(item?.mediaId) {
+        if (item == null || canvasVideoUrl != null) return@LaunchedEffect
+        val titleRaw = item.mediaMetadata.title?.toString() ?: ""
+        val artistRaw = item.mediaMetadata.artist?.toString() ?: ""
+        val albumRaw = item.mediaMetadata.albumTitle?.toString() ?: ""
+
+        val cleanTitle = normalizeCanvasSongTitle(titleRaw)
+        val cleanArtist = normalizeCanvasArtistName(artistRaw)
+
+        if (cleanTitle.isNotBlank()) {
+            withContext(Dispatchers.IO) {
+                try {
+                    var videoUrl: String? = null
+
+                    if (albumRaw.isNotBlank()) {
+                        val albumCanvas = com.j.glossycanvas.core.providers.MonochromeAlbumCanvas.getByAlbumArtist(albumRaw, cleanArtist)
+                        videoUrl = albumCanvas?.preferredAnimationUrl
+                    }
+
+                    if (videoUrl == null) {
+                        val songCanvas = com.j.glossycanvas.core.providers.MonochromeApiCanvas.getBySongArtist(cleanTitle, cleanArtist)
+                        videoUrl = songCanvas?.preferredAnimationUrl
+                    }
+
+                    if (videoUrl != null) {
+                        CanvasUrlCache.put(item.mediaId, videoUrl) 
+                        withContext(Dispatchers.Main) {
+                            canvasVideoUrl = videoUrl
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .then(
+                if (playerStyleName == "VIVI_NEW") Modifier 
+                else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
+            )
+    ) {
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(highResUri) 
+                .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .networkCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .crossfade(true)
+                .build(),
+            contentDescription = null,
+            contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (canvasVideoUrl != null && isActive) {
+            
+            // Global Player Memory (CanvasPlayerCache)
+            val exoPlayer = remember(canvasVideoUrl) {
+                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
+            }
+
+            //  Sync playback state dynamically without LaunchedEffect restart
+            LaunchedEffect(isPlaying) {
+                if (exoPlayer.playWhenReady != isPlaying) {
+                    exoPlayer.playWhenReady = isPlaying
+                }
+            }
+
+            DisposableEffect(exoPlayer) {
+                val listener = object : Player.Listener {
+                    override fun onRenderedFirstFrame() {
+                        isVideoReady = true
+                    }
+                }
+                exoPlayer.addListener(listener)
+                onDispose {
+                    exoPlayer.removeListener(listener)
+                }
+            }
+
+            val alphaAnim by animateFloatAsState(
+                targetValue = if (isVideoReady) 1f else 0f,
+                animationSpec = tween(400),
+                label = "canvasFadeIn"
+            )
+
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { viewContext ->
+                    androidx.media3.ui.PlayerView(viewContext).apply {
+                        layoutParams = android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                        player = exoPlayer
+                        useController = false
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+
+                        val textureView = android.view.TextureView(viewContext).apply {
+                            layoutParams = android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                            isOpaque = false
+                            tag = "CANVAS_TEXTURE_VIEW_MINI"
+                        }
+
+                        val surfaceParent = this.videoSurfaceView?.parent as? android.view.ViewGroup
+                        if (surfaceParent != null) {
+                            val index = surfaceParent.indexOfChild(this.videoSurfaceView)
+                            surfaceParent.removeView(this.videoSurfaceView)
+                            surfaceParent.addView(textureView, index)
+                        }
+                        exoPlayer.setVideoTextureView(textureView)
+                    }
+                },
+                update = { view ->
+                    if (view.player !== exoPlayer) {
+                        view.player = exoPlayer
+                        view.findViewWithTag<android.view.TextureView>("CANVAS_TEXTURE_VIEW_MINI")?.let {
+                            exoPlayer.setVideoTextureView(it)
+                        }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(alphaAnim)
+            )
+        }
     }
 }
