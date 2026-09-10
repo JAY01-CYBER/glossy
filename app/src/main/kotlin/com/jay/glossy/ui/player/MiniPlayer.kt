@@ -124,6 +124,7 @@ import com.jay.glossy.constants.SwipeThumbnailKey
 import com.jay.glossy.constants.ThumbnailCornerRadius
 import com.jay.glossy.constants.UseNewMiniPlayerDesignKey
 import com.jay.glossy.constants.EnableCanvasKey
+import com.jay.glossy.constants.MaxCanvasCacheSizeKey
 import com.jay.glossy.db.entities.ArtistEntity
 import com.jay.glossy.listentogether.ListenTogetherManager
 import com.metrolist.models.MediaMetadata
@@ -550,7 +551,6 @@ private fun NewMiniPlayerPlayButton(
 ) {
     val isListenTogetherGuest = listenTogetherManager?.let { it.isInRoom && !it.isHost } ?: false
     val isMuted by playerConnection.isMuted.collectAsStateWithLifecycle()
-    val isPlaying by playerConnection.isPlaying.collectAsState()
 
     val trackColor = outlineColor.copy(alpha = 0.2f)
     val strokeWidth = 3.dp
@@ -624,6 +624,9 @@ private fun NewMiniPlayerPlayButton(
                 playerStyleName = playerStyleName,
                 modifier = Modifier.fillMaxSize().clip(CircleShape)
             )
+
+            // Always observe playing state directly so UI overlay matches what's playing
+            val isPlaying by playerConnection.isPlaying.collectAsState()
 
             if (isListenTogetherGuest && isMuted ||
                 (!isListenTogetherGuest && (!isPlaying || playbackState == Player.STATE_ENDED))
@@ -848,6 +851,7 @@ private fun LegacyMiniPlayer(
                     }
                 },
     ) {
+        // Progress bar - uses drawWithContent to avoid recomposition
         Box(
             modifier =
                 Modifier
@@ -895,6 +899,7 @@ private fun LegacyMiniPlayer(
             }
         }
 
+        // Swipe indicator
         if (offsetXAnimatable.value.absoluteValue > 50f) {
             Box(
                 modifier =
@@ -1177,7 +1182,7 @@ private fun FavoriteButton(
 }
 
 /**
- *  FAST ORIGINAL THUMBNAILS + CANVAS TOGGLE 
+ * 🚀 FAST ORIGINAL THUMBNAILS + TRUE DISK CACHED CANVAS VIDEO 🚀
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
@@ -1191,8 +1196,8 @@ private fun ThumbnailImage(
     val context = LocalContext.current
     val playerConnection = LocalPlayerConnection.current ?: return
     
-    //  READ PREFERENCE: Canvas On/Off
-    val isCanvasEnabled by rememberPreference(EnableCanvasKey, true)
+    val isCanvasEnabled by rememberPreference(com.jay.glossy.constants.EnableCanvasKey, true)
+    val maxCanvasCacheSize by rememberPreference(com.jay.glossy.constants.MaxCanvasCacheSizeKey, 256)
     
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
@@ -1205,7 +1210,7 @@ private fun ThumbnailImage(
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
-        //  SAFE AND FAST IMAGE LOAD (No aggressive regex)
+        // 🚀 USER'S ORIGINAL FAST IMAGE LOADING 🚀
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(artworkUri) 
@@ -1219,9 +1224,10 @@ private fun ThumbnailImage(
             modifier = Modifier.fillMaxSize()
         )
 
+        // Only Render Video if Canvas is Enabled
         if (isCanvasEnabled && canvasVideoUrl != null && isActive) {
             val exoPlayer = remember(canvasVideoUrl) {
-                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
+                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!, maxCanvasCacheSize)
             }
 
             DisposableEffect(exoPlayer) {
