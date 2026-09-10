@@ -100,6 +100,7 @@ import com.jay.glossy.constants.PlayerStyleKey
 import com.jay.glossy.constants.SeekExtraSeconds
 import com.jay.glossy.constants.SwipeThumbnailKey
 import com.jay.glossy.constants.ThumbnailCornerRadius
+import com.jay.glossy.constants.EnableCanvasKey
 import com.jay.glossy.listentogether.RoomRole
 import com.jay.glossy.ui.component.CastButton
 import com.jay.glossy.utils.rememberEnumPreference
@@ -107,6 +108,7 @@ import com.jay.glossy.utils.rememberPreference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import com.jay.glossy.playback.CanvasPlayerCache
 
 @Immutable
 data class ThumbnailDimensions(
@@ -194,23 +196,6 @@ private fun getTextColor(playerBackground: PlayerBackgroundStyle): Color {
         PlayerBackgroundStyle.ANIMATED_MESH -> Color.White
     }
 }
-
-internal fun normalizeCanvasSongTitle(raw: String): String = raw
-    .replace(Regex("\\s*\\[[^]]*]"), "")
-    .replace(Regex("\\s*\\((?:feat\\.?|ft\\.?|featuring|with)\\b[^)]*\\)", RegexOption.IGNORE_CASE), "")
-    .replace(Regex("\\s*\\((?:from|official\\s*)?(?:music\\s*)?(?:video|mv|lyrics?|audio|visualizer|live|remaster(?:ed)?|version|edit|mix|remix)[^)]*\\)", RegexOption.IGNORE_CASE), "")
-    .replace(Regex("\\s*-\\s*(?:from|official\\s*)?(?:music\\s*)?(?:video|mv|lyrics?|audio|visualizer|live|remaster(?:ed)?|version|edit|mix|remix)\\b.*$", RegexOption.IGNORE_CASE), "")
-    .replace(Regex("\\s+"), " ")
-    .trim()
-    .trim('-')
-    .trim()
-
-internal fun normalizeCanvasArtistName(raw: String): String = raw
-    .split(Regex("(?:\\s*,\\s*|\\s*&\\s*|\\s+×\\s+|\\s+x\\s+|\\bfeat\\.?\\b|\\bft\\.?\\b|\\bfeaturing\\b|\\bwith\\b)", RegexOption.IGNORE_CASE), limit = 2)
-    .firstOrNull()
-    .orEmpty()
-    .replace(Regex("\\s+"), " ")
-    .trim()
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -674,7 +659,7 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- * 🚀 NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 🚀
+ *  NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
@@ -688,21 +673,11 @@ private fun ThumbnailImage(
     val context = LocalContext.current
     val playerConnection = LocalPlayerConnection.current ?: return
     
+    // READ SETTINGS: Toggle Canvas 
+    val isCanvasEnabled by rememberPreference(EnableCanvasKey, true)
+    
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
-
-    // 🚀 FIX 3: Safe Regex & 540p resolution (Prevents heavy load & grey box) 🚀
-    val highResUri = remember(artworkUri) {
-        if (artworkUri == null) return@remember null
-        val isGoogleImage = artworkUri.contains("googleusercontent.com") || artworkUri.contains("ggpht.com")
-        if (isGoogleImage) {
-            artworkUri.replace(Regex("=w\\d+-h\\d+.*"), "=w540-h540-l90-rj")
-                      .replace(Regex("-w\\d+-h\\d+.*"), "-w540-h540-l90-rj")
-                      .replace(Regex("=s\\d+.*"), "=w540-h540-l90-rj")
-        } else {
-            artworkUri
-        }
-    }
 
     Box(
         modifier = modifier
@@ -712,9 +687,10 @@ private fun ThumbnailImage(
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
+        // ORIGINAL FAST IMAGE LOADING 
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
-                .data(highResUri) 
+                .data(artworkUri) 
                 .memoryCachePolicy(CachePolicy.ENABLED)
                 .diskCachePolicy(CachePolicy.ENABLED)
                 .networkCachePolicy(CachePolicy.ENABLED)
@@ -725,12 +701,11 @@ private fun ThumbnailImage(
             modifier = Modifier.fillMaxSize()
         )
 
-        if (canvasVideoUrl != null && isActive) {
+        // Only Render Video if Canvas is Enabled
+        if (isCanvasEnabled && canvasVideoUrl != null && isActive) {
             val exoPlayer = remember(canvasVideoUrl) {
-                com.jay.glossy.playback.CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
+                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
-
-            // 🚀 FIX 1: LaunchedEffect DELETED. playWhenReady is ALWAYS TRUE in Cache.
 
             DisposableEffect(exoPlayer) {
                 val listener = object : Player.Listener {
