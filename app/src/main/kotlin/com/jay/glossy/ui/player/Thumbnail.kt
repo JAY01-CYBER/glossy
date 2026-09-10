@@ -87,7 +87,7 @@ import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import com.j.glossycanvas.core.providers.MonochromeAlbumCanvas // <-- नया M3Play एल्बम API
+import com.j.glossycanvas.core.providers.MonochromeAlbumCanvas
 import com.j.glossycanvas.core.providers.MonochromeApiCanvas
 import com.jay.glossy.LocalListenTogetherManager
 import com.jay.glossy.LocalPlayerConnection
@@ -109,6 +109,14 @@ import com.jay.glossy.utils.rememberPreference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+
+// 🚀 STATIC CACHE: Canvas URL को सेव रखता है ताकि मिनी-प्लेयर स्विच करते वक़्त वीडियो रीस्टार्ट या डिले ना हो!
+@Stable
+object CanvasUrlCache {
+    private val cache = mutableMapOf<String, String>()
+    fun get(key: String): String? = cache[key]
+    fun put(key: String, url: String) { cache[key] = url }
+}
 
 @Immutable
 data class ThumbnailDimensions(
@@ -232,7 +240,6 @@ fun Thumbnail(
     val queueTitle by playerConnection.queueTitle.collectAsStateWithLifecycle()
     val canSkipPrevious by playerConnection.canSkipPrevious.collectAsStateWithLifecycle()
     val canSkipNext by playerConnection.canSkipNext.collectAsStateWithLifecycle()
-    val isPlaying by playerConnection.isPlaying.collectAsState()
 
     val swipeThumbnailPref by rememberPreference(SwipeThumbnailKey, true)
     val swipeThumbnail = swipeThumbnailPref && !isListenTogetherGuest
@@ -437,7 +444,6 @@ fun Thumbnail(
                                         ThumbnailImage(
                                             item = currentMedia,
                                             isActive = isActive,
-                                            isPlaying = isPlaying,
                                             artworkUri = artworkUriToUse,
                                             cropArtwork = cropAlbumArt,
                                             playerStyleName = playerStyle.name
@@ -471,7 +477,6 @@ fun Thumbnail(
                                 ThumbnailItem(
                                     item = item,
                                     isActive = isActive,
-                                    isPlaying = isPlaying,
                                     dimensions = dimensions,
                                     hidePlayerThumbnail = hidePlayerThumbnail,
                                     cropAlbumArt = cropAlbumArt,
@@ -565,7 +570,6 @@ private fun ThumbnailHeader(
 private fun ThumbnailItem(
     item: MediaItem,
     isActive: Boolean,
-    isPlaying: Boolean,
     dimensions: ThumbnailDimensions,
     hidePlayerThumbnail: Boolean,
     cropAlbumArt: Boolean,
@@ -644,7 +648,6 @@ private fun ThumbnailItem(
                 ThumbnailImage(
                     item = item,
                     isActive = isActive,
-                    isPlaying = isPlaying,
                     artworkUri = artworkUriToUse,
                     cropArtwork = cropAlbumArt,
                     playerStyleName = playerStyleName
@@ -683,26 +686,34 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- * TextureView + Album Fallback + onRenderedFirstFrame (M3Play Architecture)
+ * TextureView + Album Fallback + Caching + High-Res Image (No more grey box or delays)
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun ThumbnailImage(
     item: MediaItem?,
     isActive: Boolean,
-    isPlaying: Boolean,
     artworkUri: String?,
     cropArtwork: Boolean,
     playerStyleName: String,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var canvasVideoUrl by remember(item?.mediaId) { mutableStateOf<String?>(null) }
+    
+    // 🚀 FIX 1: YouTube Music URL को जबरदस्ती 1080p High-Res में कन्वर्ट करता है ताकि Coil फेल न हो और Grey Box न दिखे
+    val highResUri = remember(artworkUri) {
+        artworkUri?.replace(Regex("=[wh]\\d+-[wh]\\d+.*"), "=w1080-h1080-l90-rj")
+            ?.replace(Regex("-[wh]\\d+-[wh]\\d+.*"), "-w1080-h1080-l90-rj")
+            ?.replace(Regex("=s\\d+.*"), "=s1080-l90-rj")
+    } ?: artworkUri
+
+    // 🚀 FIX 3: URL Cache से तुरंत लिंक उठाता है जिससे मिनी-प्लेयर स्विच करते वक़्त वीडियो रीस्टार्ट या डिले नहीं होता
+    var canvasVideoUrl by remember(item?.mediaId) { mutableStateOf(CanvasUrlCache.get(item?.mediaId ?: "")) }
     var isVideoReady by remember(item?.mediaId) { mutableStateOf(false) }
 
-    // M3PLAY SECRET: Album First, Song Second
+    // Fetch URL logic
     LaunchedEffect(item?.mediaId) {
-        if (item == null) return@LaunchedEffect
+        if (item == null || canvasVideoUrl != null) return@LaunchedEffect
         val titleRaw = item.mediaMetadata.title?.toString() ?: ""
         val artistRaw = item.mediaMetadata.artist?.toString() ?: ""
         val albumRaw = item.mediaMetadata.albumTitle?.toString() ?: ""
@@ -715,26 +726,21 @@ private fun ThumbnailImage(
                 try {
                     var videoUrl: String? = null
 
-                    // 1. FIRST TRY: Fetch by Album & Artist (M3Play Logic)
                     if (albumRaw.isNotBlank()) {
-                        val albumCanvas = MonochromeAlbumCanvas.getByAlbumArtist(
-                            album = albumRaw,
-                            artist = cleanArtist
-                        )
+                        val albumCanvas = MonochromeAlbumCanvas.getByAlbumArtist(albumRaw, cleanArtist)
                         videoUrl = albumCanvas?.preferredAnimationUrl
                     }
 
-                    // 2. SECOND TRY: Fetch by Song & Artist (Fallback)
                     if (videoUrl == null) {
-                        val songCanvas = MonochromeApiCanvas.getBySongArtist(
-                            song = cleanTitle,
-                            artist = cleanArtist
-                        )
+                        val songCanvas = MonochromeApiCanvas.getBySongArtist(cleanTitle, cleanArtist)
                         videoUrl = songCanvas?.preferredAnimationUrl
                     }
 
-                    withContext(Dispatchers.Main) {
-                        canvasVideoUrl = videoUrl
+                    if (videoUrl != null) {
+                        CanvasUrlCache.put(item.mediaId, videoUrl) // Save to cache
+                        withContext(Dispatchers.Main) {
+                            canvasVideoUrl = videoUrl
+                        }
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -751,10 +757,10 @@ private fun ThumbnailImage(
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
-        // Base Album Artwork (Always Present)
+        // Base Album Artwork (Always Present with Crossfade)
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
-                .data(artworkUri)
+                .data(highResUri) // Uses strictly High-Res URI now
                 .memoryCachePolicy(CachePolicy.ENABLED)
                 .diskCachePolicy(CachePolicy.ENABLED)
                 .networkCachePolicy(CachePolicy.ENABLED)
@@ -778,12 +784,9 @@ private fun ThumbnailImage(
                     )
                     volume = 0f
                     repeatMode = Player.REPEAT_MODE_ONE
-                    playWhenReady = isPlaying
+                    // 🚀 FIX 2: यह हमेशा true रहेगा, जिससे गाना पॉज़ होने पर भी वीडियो बैकग्राउंड में चलता रहेगा
+                    playWhenReady = true 
                 }
-            }
-
-            LaunchedEffect(isPlaying) {
-                exoPlayer.playWhenReady = isPlaying
             }
 
             DisposableEffect(exoPlayer) {
@@ -805,7 +808,7 @@ private fun ThumbnailImage(
                 exoPlayer.stop()
                 exoPlayer.setMediaItem(MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
                 exoPlayer.prepare()
-                exoPlayer.playWhenReady = isPlaying
+                exoPlayer.playWhenReady = true // 🚀 FIX 2: Always True
             }
 
             val alphaAnim by animateFloatAsState(
