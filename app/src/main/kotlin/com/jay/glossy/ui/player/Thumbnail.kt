@@ -87,6 +87,8 @@ import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.j.glossycanvas.core.providers.MonochromeAlbumCanvas
+import com.j.glossycanvas.core.providers.MonochromeApiCanvas
 import com.jay.glossy.LocalListenTogetherManager
 import com.jay.glossy.LocalPlayerConnection
 import com.jay.glossy.R
@@ -109,7 +111,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import com.jay.glossy.playback.CanvasUrlCache
 
-// 🚀 STATIC CACHE: Global ExoPlayer Instance
+//  STATIC CACHE: Global ExoPlayer Instance
 @Stable
 object CanvasPlayerCache {
     private var exoPlayer: ExoPlayer? = null
@@ -134,7 +136,7 @@ object CanvasPlayerCache {
             )
             volume = 0f
             repeatMode = Player.REPEAT_MODE_ONE
-            playWhenReady = true
+            playWhenReady = true // 🚀 Always True: Keeps playing when paused!
             
             val mimeType = if (url.lowercase().contains("mp4")) MimeTypes.VIDEO_MP4 else MimeTypes.APPLICATION_M3U8
             setMediaItem(MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
@@ -237,7 +239,6 @@ private fun getTextColor(playerBackground: PlayerBackgroundStyle): Color {
     }
 }
 
-// Fixed visibility so MiniPlayer can use them
 internal fun normalizeCanvasSongTitle(raw: String): String = raw
     .replace(Regex("\\s*\\[[^]]*]"), "")
     .replace(Regex("\\s*\\((?:feat\\.?|ft\\.?|featuring|with)\\b[^)]*\\)", RegexOption.IGNORE_CASE), "")
@@ -273,7 +274,6 @@ fun Thumbnail(
     val queueTitle by playerConnection.queueTitle.collectAsStateWithLifecycle()
     val canSkipPrevious by playerConnection.canSkipPrevious.collectAsStateWithLifecycle()
     val canSkipNext by playerConnection.canSkipNext.collectAsStateWithLifecycle()
-    val isPlaying by playerConnection.isPlaying.collectAsState()
 
     val swipeThumbnailPref by rememberPreference(SwipeThumbnailKey, true)
     val swipeThumbnail = swipeThumbnailPref && !isListenTogetherGuest
@@ -478,7 +478,6 @@ fun Thumbnail(
                                         ThumbnailImage(
                                             item = currentMedia,
                                             isActive = isActive,
-                                            isPlaying = isPlaying,
                                             artworkUri = artworkUriToUse,
                                             cropArtwork = cropAlbumArt,
                                             playerStyleName = playerStyle.name
@@ -512,7 +511,6 @@ fun Thumbnail(
                                 ThumbnailItem(
                                     item = item,
                                     isActive = isActive,
-                                    isPlaying = isPlaying,
                                     dimensions = dimensions,
                                     hidePlayerThumbnail = hidePlayerThumbnail,
                                     cropAlbumArt = cropAlbumArt,
@@ -606,7 +604,6 @@ private fun ThumbnailHeader(
 private fun ThumbnailItem(
     item: MediaItem,
     isActive: Boolean,
-    isPlaying: Boolean,
     dimensions: ThumbnailDimensions,
     hidePlayerThumbnail: Boolean,
     cropAlbumArt: Boolean,
@@ -685,7 +682,6 @@ private fun ThumbnailItem(
                 ThumbnailImage(
                     item = item,
                     isActive = isActive,
-                    isPlaying = isPlaying,
                     artworkUri = artworkUriToUse,
                     cropArtwork = cropAlbumArt,
                     playerStyleName = playerStyleName
@@ -724,14 +720,13 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- * 🚀 NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 🚀
+ * no api call in ui
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun ThumbnailImage(
     item: MediaItem?,
     isActive: Boolean,
-    isPlaying: Boolean,
     artworkUri: String?,
     cropArtwork: Boolean,
     playerStyleName: String,
@@ -743,11 +738,18 @@ private fun ThumbnailImage(
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
 
+
     val highResUri = remember(artworkUri) {
-        artworkUri?.replace(Regex("=[wh]\\d+-[wh]\\d+.*"), "=w1080-h1080-l90-rj")
-            ?.replace(Regex("-[wh]\\d+-[wh]\\d+.*"), "-w1080-h1080-l90-rj")
-            ?.replace(Regex("=s\\d+.*"), "=s1080-l90-rj")
-    } ?: artworkUri
+        if (artworkUri == null) return@remember null
+        val isGoogleImage = artworkUri.contains("googleusercontent.com") || artworkUri.contains("ggpht.com")
+        if (isGoogleImage) {
+            artworkUri.replace(Regex("=w\\d+-h\\d+.*"), "=w1080-h1080")
+                      .replace(Regex("-w\\d+-h\\d+.*"), "-w1080-h1080")
+                      .replace(Regex("=s\\d+.*"), "=w1080-h1080")
+        } else {
+            artworkUri
+        }
+    }
 
     Box(
         modifier = modifier
@@ -763,7 +765,6 @@ private fun ThumbnailImage(
                 .memoryCachePolicy(CachePolicy.ENABLED)
                 .diskCachePolicy(CachePolicy.ENABLED)
                 .networkCachePolicy(CachePolicy.ENABLED)
-                .crossfade(true)
                 .build(),
             contentDescription = null,
             contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
@@ -775,11 +776,7 @@ private fun ThumbnailImage(
                 CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
 
-            LaunchedEffect(isPlaying) {
-                if (exoPlayer.playWhenReady != isPlaying) {
-                    exoPlayer.playWhenReady = isPlaying
-                }
-            }
+    
 
             DisposableEffect(exoPlayer) {
                 val listener = object : Player.Listener {
