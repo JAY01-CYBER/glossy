@@ -103,6 +103,7 @@ import coil3.imageLoader
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
+import coil3.request.crossfade
 import coil3.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -177,6 +178,10 @@ fun MiniPlayer(
         }
     }
 }
+
+// ============================================================================
+// NEW MINI PLAYER DESIGN
+// ============================================================================
 
 @Composable
 private fun NewMiniPlayer(
@@ -394,7 +399,15 @@ private fun NewMiniPlayer(
             when (miniPlayerBackground) {
                 MiniPlayerBackgroundStyle.BLUR -> {
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                        mediaMetadata?.thumbnailUrl?.let { url ->
+                        // 🚀 FIX 3: Blurring a 120p Low-Res image instead of 1080p to stop UI Lag 🚀
+                        val lowResForBlur = mediaMetadata?.thumbnailUrl?.let { url ->
+                            if (url.contains("googleusercontent.com") || url.contains("ggpht.com")) {
+                                url.replace(Regex("=w\\d+-h\\d+.*"), "=w120-h120-l90-rj")
+                                   .replace(Regex("-w\\d+-h\\d+.*"), "-w120-h120-l90-rj")
+                                   .replace(Regex("=s\\d+.*"), "=w120-h120-l90-rj")
+                            } else url
+                        }
+                        lowResForBlur?.let { url ->
                             AsyncImage(
                                 model = url,
                                 contentDescription = null,
@@ -604,7 +617,6 @@ private fun NewMiniPlayerPlayButton(
             val playerStyleName = "VIVI_NEW"
             
             ThumbnailImage(
-                item = playerConnection.player.currentMediaItem,
                 isActive = true,
                 artworkUri = mediaMetadata?.thumbnailUrl,
                 cropArtwork = true,
@@ -959,7 +971,6 @@ private fun LegacyMiniMediaInfo(
 ) {
     val error by LocalPlayerConnection.current?.error?.collectAsState() ?: remember { mutableStateOf(null) }
     val cropAlbumArt by rememberPreference(CropAlbumArtKey, false)
-    val playerConnection = LocalPlayerConnection.current ?: return
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -980,7 +991,6 @@ private fun LegacyMiniMediaInfo(
             )
 
             ThumbnailImage(
-                item = playerConnection.player.currentMediaItem,
                 isActive = true,
                 artworkUri = mediaMetadata.thumbnailUrl,
                 cropArtwork = cropAlbumArt,
@@ -1163,12 +1173,11 @@ private fun FavoriteButton(
 }
 
 /**
- * NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 
+ * 🚀 NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 🚀
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun ThumbnailImage(
-    item: androidx.media3.common.MediaItem?,
     isActive: Boolean,
     artworkUri: String?,
     cropArtwork: Boolean,
@@ -1181,14 +1190,14 @@ private fun ThumbnailImage(
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
 
-    // Safe Regex to prevent grey box 
+    // 🚀 FIX 3: Safe Regex & 540p resolution (Prevents heavy load & grey box) 🚀
     val highResUri = remember(artworkUri) {
         if (artworkUri == null) return@remember null
         val isGoogleImage = artworkUri.contains("googleusercontent.com") || artworkUri.contains("ggpht.com")
         if (isGoogleImage) {
-            artworkUri.replace(Regex("=w\\d+-h\\d+.*"), "=w1080-h1080")
-                      .replace(Regex("-w\\d+-h\\d+.*"), "-w1080-h1080")
-                      .replace(Regex("=s\\d+.*"), "=w1080-h1080")
+            artworkUri.replace(Regex("=w\\d+-h\\d+.*"), "=w540-h540-l90-rj")
+                      .replace(Regex("-w\\d+-h\\d+.*"), "-w540-h540-l90-rj")
+                      .replace(Regex("=s\\d+.*"), "=w540-h540-l90-rj")
         } else {
             artworkUri
         }
@@ -1205,6 +1214,10 @@ private fun ThumbnailImage(
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(highResUri) 
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .networkCachePolicy(CachePolicy.ENABLED)
+                .crossfade(true)
                 .build(),
             contentDescription = null,
             contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
@@ -1213,10 +1226,10 @@ private fun ThumbnailImage(
 
         if (canvasVideoUrl != null && isActive) {
             val exoPlayer = remember(canvasVideoUrl) {
-                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
+                com.jay.glossy.playback.CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
 
-            //  LaunchedEffect deleted so it NEVER pauses on song pause! 
+            // 🚀 FIX 1: LaunchedEffect DELETED. playWhenReady is ALWAYS TRUE in Cache.
 
             DisposableEffect(exoPlayer) {
                 val listener = object : Player.Listener {
@@ -1274,4 +1287,21 @@ private fun ThumbnailImage(
             )
         }
     }
+}
+
+@Composable
+private fun SeekEffectOverlay(
+    seekDirection: String,
+    modifier: Modifier = Modifier
+) {
+    Text(
+        text = seekDirection,
+        color = Color.White,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+            .padding(8.dp)
+    )
 }
