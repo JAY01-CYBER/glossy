@@ -123,11 +123,13 @@ import com.jay.glossy.constants.SwipeSensitivityKey
 import com.jay.glossy.constants.SwipeThumbnailKey
 import com.jay.glossy.constants.ThumbnailCornerRadius
 import com.jay.glossy.constants.UseNewMiniPlayerDesignKey
+import com.jay.glossy.constants.EnableCanvasKey
 import com.jay.glossy.db.entities.ArtistEntity
 import com.jay.glossy.listentogether.ListenTogetherManager
 import com.metrolist.models.MediaMetadata
 import com.jay.glossy.playback.CastConnectionHandler
 import com.jay.glossy.playback.PlayerConnection
+import com.jay.glossy.playback.CanvasPlayerCache
 import com.jay.glossy.ui.screens.settings.DarkMode
 import com.jay.glossy.ui.utils.resize
 import com.jay.glossy.utils.joinToArtistString
@@ -400,14 +402,11 @@ private fun NewMiniPlayer(
             when (miniPlayerBackground) {
                 MiniPlayerBackgroundStyle.BLUR -> {
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                        val lowResForBlur = mediaMetadata?.thumbnailUrl?.let { url ->
-                            if (url.contains("googleusercontent.com") || url.contains("ggpht.com")) {
-                                url.replace(Regex("=w\\d+-h\\d+.*"), "=w120-h120-l90-rj")
-                                   .replace(Regex("-w\\d+-h\\d+.*"), "-w120-h120-l90-rj")
-                                   .replace(Regex("=s\\d+.*"), "=w120-h120-l90-rj")
-                            } else url
-                        }
-                        lowResForBlur?.let { url ->
+                        val thumbnailUrl =
+                            remember(mediaMetadata?.thumbnailUrl) {
+                                mediaMetadata?.thumbnailUrl?.resize(120, 120)
+                            }
+                        thumbnailUrl?.let { url ->
                             AsyncImage(
                                 model = url,
                                 contentDescription = null,
@@ -549,11 +548,9 @@ private fun NewMiniPlayerPlayButton(
     outlineColor: Color,
     listenTogetherManager: ListenTogetherManager?,
 ) {
-    val isPlaying by playerConnection.isPlaying.collectAsState()
-    val castIsPlaying by castHandler?.castIsPlaying?.collectAsState() ?: remember { mutableStateOf(false) }
-    val effectiveIsPlaying = if (isCasting) castIsPlaying else isPlaying
     val isListenTogetherGuest = listenTogetherManager?.let { it.isInRoom && !it.isHost } ?: false
     val isMuted by playerConnection.isMuted.collectAsStateWithLifecycle()
+    val isPlaying by playerConnection.isPlaying.collectAsState()
 
     val trackColor = outlineColor.copy(alpha = 0.2f)
     val strokeWidth = 3.dp
@@ -605,7 +602,7 @@ private fun NewMiniPlayerPlayButton(
                             return@clickable
                         }
                         if (isCasting) {
-                            if (castIsPlaying) castHandler?.pause() else castHandler?.play()
+                            if (castHandler?.castIsPlaying?.value == true) castHandler.pause() else castHandler?.play()
                         } else if (playbackState == Player.STATE_ENDED) {
                             playerConnection.player.seekTo(0, 0)
                             playerConnection.player.playWhenReady = true
@@ -615,17 +612,21 @@ private fun NewMiniPlayerPlayButton(
                     },
         ) {
             val playerStyleName = "VIVI_NEW"
+            val thumbnailUrl =
+                remember(mediaMetadata?.thumbnailUrl) {
+                    mediaMetadata?.thumbnailUrl?.resize(120, 120)
+                }
             
             ThumbnailImage(
                 isActive = true,
-                artworkUri = mediaMetadata?.thumbnailUrl,
+                artworkUri = thumbnailUrl,
                 cropArtwork = true,
                 playerStyleName = playerStyleName,
                 modifier = Modifier.fillMaxSize().clip(CircleShape)
             )
 
             if (isListenTogetherGuest && isMuted ||
-                (!isListenTogetherGuest && (!effectiveIsPlaying || playbackState == Player.STATE_ENDED))
+                (!isListenTogetherGuest && (!isPlaying || playbackState == Player.STATE_ENDED))
             ) {
                 Box(
                     modifier =
@@ -927,10 +928,8 @@ private fun LegacyPlayPauseButton(
     listenTogetherManager: ListenTogetherManager?,
 ) {
     val isPlaying by playerConnection.isPlaying.collectAsState()
-    val castIsPlaying by castHandler?.castIsPlaying?.collectAsState() ?: remember { mutableStateOf(false) }
-    val effectiveIsPlaying = if (isCasting) castIsPlaying else isPlaying
-    val isListenTogetherGuest = listenTogetherManager?.let { it.isInRoom && !it.isHost } ?: false
     val isMuted by playerConnection.isMuted.collectAsStateWithLifecycle()
+    val isListenTogetherGuest = listenTogetherManager?.let { it.isInRoom && !it.isHost } ?: false
 
     IconButton(
         onClick = {
@@ -939,7 +938,7 @@ private fun LegacyPlayPauseButton(
                 return@IconButton
             }
             if (isCasting) {
-                if (castIsPlaying) castHandler?.pause() else castHandler?.play()
+                if (castHandler?.castIsPlaying?.value == true) castHandler.pause() else castHandler?.play()
             } else if (playbackState == Player.STATE_ENDED) {
                 playerConnection.player.seekTo(0, 0)
                 playerConnection.player.playWhenReady = true
@@ -954,7 +953,7 @@ private fun LegacyPlayPauseButton(
                     when {
                         isListenTogetherGuest -> if (isMuted) R.drawable.volume_off else R.drawable.volume_up
                         playbackState == Player.STATE_ENDED -> R.drawable.replay
-                        effectiveIsPlaying -> R.drawable.pause
+                        isPlaying -> R.drawable.pause
                         else -> R.drawable.play
                     },
                 ),
@@ -990,9 +989,14 @@ private fun LegacyMiniMediaInfo(
                         .background(MaterialTheme.colorScheme.surfaceVariant),
             )
 
+            val thumbnailUrl =
+                remember(mediaMetadata.thumbnailUrl) {
+                    mediaMetadata.thumbnailUrl?.resize(144, 144)
+                }
+                
             ThumbnailImage(
                 isActive = true,
-                artworkUri = mediaMetadata.thumbnailUrl,
+                artworkUri = thumbnailUrl,
                 cropArtwork = cropAlbumArt,
                 playerStyleName = "LEGACY",
                 modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(ThumbnailCornerRadius))
@@ -1173,7 +1177,7 @@ private fun FavoriteButton(
 }
 
 /**
- * 🚀 NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 🚀
+ *  FAST ORIGINAL THUMBNAILS + CANVAS TOGGLE 
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
@@ -1187,20 +1191,11 @@ private fun ThumbnailImage(
     val context = LocalContext.current
     val playerConnection = LocalPlayerConnection.current ?: return
     
+    //  READ PREFERENCE: Canvas On/Off
+    val isCanvasEnabled by rememberPreference(EnableCanvasKey, true)
+    
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
-
-    val highResUri = remember(artworkUri) {
-        if (artworkUri == null) return@remember null
-        val isGoogleImage = artworkUri.contains("googleusercontent.com") || artworkUri.contains("ggpht.com")
-        if (isGoogleImage) {
-            artworkUri.replace(Regex("=w\\d+-h\\d+.*"), "=w540-h540-l90-rj")
-                      .replace(Regex("-w\\d+-h\\d+.*"), "-w540-h540-l90-rj")
-                      .replace(Regex("=s\\d+.*"), "=w540-h540-l90-rj")
-        } else {
-            artworkUri
-        }
-    }
 
     Box(
         modifier = modifier
@@ -1210,9 +1205,10 @@ private fun ThumbnailImage(
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
+        //  SAFE AND FAST IMAGE LOAD (No aggressive regex)
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
-                .data(highResUri) 
+                .data(artworkUri) 
                 .memoryCachePolicy(CachePolicy.ENABLED)
                 .diskCachePolicy(CachePolicy.ENABLED)
                 .networkCachePolicy(CachePolicy.ENABLED)
@@ -1223,9 +1219,9 @@ private fun ThumbnailImage(
             modifier = Modifier.fillMaxSize()
         )
 
-        if (canvasVideoUrl != null && isActive) {
+        if (isCanvasEnabled && canvasVideoUrl != null && isActive) {
             val exoPlayer = remember(canvasVideoUrl) {
-                com.jay.glossy.playback.CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
+                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
 
             DisposableEffect(exoPlayer) {
