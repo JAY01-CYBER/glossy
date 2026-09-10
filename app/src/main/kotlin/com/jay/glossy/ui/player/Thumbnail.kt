@@ -87,6 +87,7 @@ import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.j.glossycanvas.core.providers.MonochromeAlbumCanvas // <-- नया M3Play एल्बम API
 import com.j.glossycanvas.core.providers.MonochromeApiCanvas
 import com.jay.glossy.LocalListenTogetherManager
 import com.jay.glossy.LocalPlayerConnection
@@ -682,7 +683,7 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- * TextureView & onRenderedFirstFrame based Canvas video player
+ * TextureView + Album Fallback + onRenderedFirstFrame (M3Play Architecture)
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
@@ -699,23 +700,41 @@ private fun ThumbnailImage(
     var canvasVideoUrl by remember(item?.mediaId) { mutableStateOf<String?>(null) }
     var isVideoReady by remember(item?.mediaId) { mutableStateOf(false) }
 
+    // M3PLAY SECRET: Album First, Song Second
     LaunchedEffect(item?.mediaId) {
         if (item == null) return@LaunchedEffect
         val titleRaw = item.mediaMetadata.title?.toString() ?: ""
         val artistRaw = item.mediaMetadata.artist?.toString() ?: ""
-        
+        val albumRaw = item.mediaMetadata.albumTitle?.toString() ?: ""
+
         val cleanTitle = normalizeCanvasSongTitle(titleRaw)
         val cleanArtist = normalizeCanvasArtistName(artistRaw)
 
         if (cleanTitle.isNotBlank()) {
             withContext(Dispatchers.IO) {
                 try {
-                    val canvasData = MonochromeApiCanvas.getBySongArtist(
-                        song = cleanTitle,
-                        artist = cleanArtist
-                    )
+                    var videoUrl: String? = null
+
+                    // 1. FIRST TRY: Fetch by Album & Artist (M3Play Logic)
+                    if (albumRaw.isNotBlank()) {
+                        val albumCanvas = MonochromeAlbumCanvas.getByAlbumArtist(
+                            album = albumRaw,
+                            artist = cleanArtist
+                        )
+                        videoUrl = albumCanvas?.preferredAnimationUrl
+                    }
+
+                    // 2. SECOND TRY: Fetch by Song & Artist (Fallback)
+                    if (videoUrl == null) {
+                        val songCanvas = MonochromeApiCanvas.getBySongArtist(
+                            song = cleanTitle,
+                            artist = cleanArtist
+                        )
+                        videoUrl = songCanvas?.preferredAnimationUrl
+                    }
+
                     withContext(Dispatchers.Main) {
-                        canvasVideoUrl = canvasData?.preferredAnimationUrl
+                        canvasVideoUrl = videoUrl
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
