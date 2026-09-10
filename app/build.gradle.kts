@@ -419,4 +419,7 @@ dependencies {
     implementation("io.github.kyant0:backdrop:2.0.1")
     implementation("dev.chrisbanes.haze:haze:1.1.1")
     implementation("dev.chrisbanes.haze:haze-materials:1.1.1")
+    
+    // Glossy Canvas Core
+    implementation(libs.glossycanvas.core)
 }
