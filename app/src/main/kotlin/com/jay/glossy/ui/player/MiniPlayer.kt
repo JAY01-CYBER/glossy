@@ -88,6 +88,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
@@ -399,7 +400,6 @@ private fun NewMiniPlayer(
             when (miniPlayerBackground) {
                 MiniPlayerBackgroundStyle.BLUR -> {
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                        // 🚀 FIX 3: Blurring a 120p Low-Res image instead of 1080p to stop UI Lag 🚀
                         val lowResForBlur = mediaMetadata?.thumbnailUrl?.let { url ->
                             if (url.contains("googleusercontent.com") || url.contains("ggpht.com")) {
                                 url.replace(Regex("=w\\d+-h\\d+.*"), "=w120-h120-l90-rj")
@@ -1190,7 +1190,6 @@ private fun ThumbnailImage(
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
 
-    // 🚀 FIX 3: Safe Regex & 540p resolution (Prevents heavy load & grey box) 🚀
     val highResUri = remember(artworkUri) {
         if (artworkUri == null) return@remember null
         val isGoogleImage = artworkUri.contains("googleusercontent.com") || artworkUri.contains("ggpht.com")
@@ -1228,8 +1227,6 @@ private fun ThumbnailImage(
             val exoPlayer = remember(canvasVideoUrl) {
                 com.jay.glossy.playback.CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
-
-            // 🚀 FIX 1: LaunchedEffect DELETED. playWhenReady is ALWAYS TRUE in Cache.
 
             DisposableEffect(exoPlayer) {
                 val listener = object : Player.Listener {
