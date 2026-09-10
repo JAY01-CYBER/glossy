@@ -1,5 +1,5 @@
 /**
- * Metrolist Project (C) 2026
+ * Glossy Project (C) 2026
  * Licensed under GPL-3.0 | See git history for contributors
  */
 
@@ -19,7 +19,13 @@ import androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM
 import androidx.media3.common.Player.REPEAT_MODE_OFF
 import androidx.media3.common.Player.STATE_ENDED
 import androidx.media3.common.Timeline
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.jay.glossy.constants.SleepTimerCustomDaysKey
 import com.jay.glossy.constants.SleepTimerDayTimesKey
 import com.jay.glossy.constants.SleepTimerDefaultKey
@@ -27,6 +33,7 @@ import com.jay.glossy.constants.SleepTimerEnabledKey
 import com.jay.glossy.constants.SleepTimerEndTimeKey
 import com.jay.glossy.constants.SleepTimerRepeatKey
 import com.jay.glossy.constants.SleepTimerStartTimeKey
+import com.jay.glossy.constants.EnableCanvasKey
 import com.jay.glossy.db.MusicDatabase
 import com.jay.glossy.extensions.currentMetadata
 import com.jay.glossy.extensions.getCurrentQueueIndex
@@ -47,27 +54,39 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.io.File
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
-// 🚀 GLOBAL CANVAS URL & PLAYER CACHE (Zero UI Lag Solution) 🚀
+// GLOBAL CANVAS URL CACHE
 object CanvasUrlCache {
     private val cache = mutableMapOf<String, String>()
     fun get(key: String): String? = cache[key]
     fun put(key: String, url: String) { cache[key] = url }
 }
 
+//  TRUE VIDEO DISK CACHE SYSTEM (Like Spotify) 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 object CanvasPlayerCache {
     private var exoPlayer: ExoPlayer? = null
     private var currentUrl: String? = null
+    private var simpleCache: SimpleCache? = null
 
     fun getPlayer(context: Context, url: String): ExoPlayer {
+        // 1. Initialize Disk Cache (Saves video files to storage for instant load later)
+        if (simpleCache == null) {
+            val cacheDir = File(context.cacheDir, "canvas_video_cache")
+            val evictor = LeastRecentlyUsedCacheEvictor(200 * 1024 * 1024) // 200MB Max Cache
+            simpleCache = SimpleCache(cacheDir, evictor, StandaloneDatabaseProvider(context))
+        }
+
+        // 2. Initialize Player
         if (exoPlayer == null) {
             exoPlayer = ExoPlayer.Builder(context.applicationContext).build().apply {
                 setAudioAttributes(
@@ -79,18 +98,36 @@ object CanvasPlayerCache {
                 )
                 volume = 0f
                 repeatMode = Player.REPEAT_MODE_ONE
-                playWhenReady = true // Always keep canvas playing even if paused
+                playWhenReady = true
             }
         }
         
-        // 🚀 Swap URL without rebuilding the player (Fixes UI Freezing)
+        // 3. Play from Cache or Network
         if (url != currentUrl) {
             currentUrl = url
+            
+            val dataSourceFactory = DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)
+            val cacheDataSourceFactory = CacheDataSource.Factory()
+                .setCache(simpleCache!!)
+                .setUpstreamDataSourceFactory(dataSourceFactory)
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
             val mimeType = if (url.lowercase().contains("mp4")) MimeTypes.VIDEO_MP4 else MimeTypes.APPLICATION_M3U8
-            exoPlayer?.setMediaItem(MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
+            val mediaItem = MediaItem.Builder().setUri(url).setMimeType(mimeType).build()
+            
+            val mediaSource = DefaultMediaSourceFactory(cacheDataSourceFactory).createMediaSource(mediaItem)
+            
+            exoPlayer?.setMediaSource(mediaSource)
             exoPlayer?.prepare()
         }
         return exoPlayer!!
+    }
+
+    fun clearCache(context: Context) {
+        val cacheDir = File(context.cacheDir, "canvas_video_cache")
+        if (cacheDir.exists()) cacheDir.deleteRecursively()
+        simpleCache?.release()
+        simpleCache = null
     }
 
     fun release() {
@@ -115,6 +152,16 @@ class PlayerConnection(
     private val playerReadinessFlow = service.isPlayerReady
 
     val currentCanvasUrl = MutableStateFlow<String?>(null)
+    private val isCanvasEnabled = MutableStateFlow(true)
+
+    init {
+        // Observe Settings Toggle for Canvas
+        scope.launch {
+            context.dataStore.data.map { it[EnableCanvasKey] ?: true }.collect {
+                isCanvasEnabled.value = it
+            }
+        }
+    }
 
     private fun getPlayerSafe(): ExoPlayer {
         check(playerReadinessFlow.value) {
@@ -414,11 +461,15 @@ class PlayerConnection(
     }
 
     private fun prefetchCanvasUrls() {
+        if (!isCanvasEnabled.value) {
+            currentCanvasUrl.value = null
+            return
+        }
+
         val currentItem = getPlayerOrNull()?.currentMediaItem
         val nextIndex = getPlayerOrNull()?.nextMediaItemIndex ?: C.INDEX_UNSET
         val nextItem = if (nextIndex != C.INDEX_UNSET) getPlayerOrNull()?.getMediaItemAt(nextIndex) else null
 
-        // 🚀 FIX: Instant Swap / URL cleanup to prevent bleeding previous canvas
         if (currentItem != null) {
             val mediaId = currentItem.mediaId
             val cachedUrl = CanvasUrlCache.get(mediaId)
