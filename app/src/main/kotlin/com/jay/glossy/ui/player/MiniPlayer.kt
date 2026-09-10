@@ -103,7 +103,6 @@ import coil3.imageLoader
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
-import coil3.request.crossfade
 import coil3.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -140,10 +139,6 @@ import com.jay.glossy.ui.theme.PlayerColorExtractor
 import com.jay.glossy.ui.component.LocalMenuState
 import com.jay.glossy.ui.menu.AddToPlaylistDialog
 
-/**
- * Stable wrapper for progress state - reads values only during draw phase
- * This prevents recomposition when position/duration change
- */
 @Stable
 class ProgressState(
     private val positionState: MutableLongState,
@@ -164,8 +159,6 @@ fun MiniPlayer(
     onClick: () -> Unit = {},
 ) {
     val useNewMiniPlayerDesign by rememberPreference(UseNewMiniPlayerDesignKey, true)
-
-    // Create stable progress state - doesn't cause recomposition on position changes
     val progressState = remember { ProgressState(positionState, durationState) }
 
     if (useNewMiniPlayerDesign) {
@@ -185,10 +178,6 @@ fun MiniPlayer(
     }
 }
 
-// ============================================================================
-// NEW MINI PLAYER DESIGN
-// ============================================================================
-
 @Composable
 private fun NewMiniPlayer(
     progressState: ProgressState,
@@ -198,7 +187,6 @@ private fun NewMiniPlayer(
     val playerConnection = LocalPlayerConnection.current ?: return
     val menuState = LocalMenuState.current
 
-    // Theme settings - these rarely change
     val miniPlayerBackground by rememberEnumPreference(
         MiniPlayerBackgroundStyleKey,
         defaultValue = MiniPlayerBackgroundStyle.DEFAULT,
@@ -212,13 +200,11 @@ private fun NewMiniPlayer(
             if (darkTheme == DarkMode.AUTO) isSystemInDarkTheme else darkTheme == DarkMode.ON
         }
 
-    // Player states - only collect what's needed at this level
     val playbackState by playerConnection.playbackState.collectAsState()
     val mediaMetadata by playerConnection.mediaMetadata.collectAsState()
     val canSkipNext by playerConnection.canSkipNext.collectAsStateWithLifecycle()
     val canSkipPrevious by playerConnection.canSkipPrevious.collectAsStateWithLifecycle()
 
-    // Cast state - safely access castConnectionHandler to prevent crashes during service lifecycle changes
     val castHandler =
         remember(playerConnection) {
             try {
@@ -229,11 +215,9 @@ private fun NewMiniPlayer(
         }
     val isCasting by castHandler?.isCasting?.collectAsStateWithLifecycle() ?: remember { mutableStateOf(false) }
 
-    // Swipe settings
     val swipeSensitivity by rememberPreference(SwipeSensitivityKey, 0.73f)
     val swipeThumbnailPref by rememberPreference(SwipeThumbnailKey, true)
 
-    // Disable swipe for Listen Together guests
     val listenTogetherManager = LocalListenTogetherManager.current
     val isListenTogetherGuest = listenTogetherManager?.let { it.isInRoom && !it.isHost } ?: false
     val swipeThumbnail = swipeThumbnailPref && !isListenTogetherGuest
@@ -249,7 +233,6 @@ private fun NewMiniPlayer(
             (windowInfo.containerSize.width / density.density) >= 600f && configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         }
 
-    // Swipe animation state
     val offsetXAnimatable = remember { Animatable(0f) }
     var dragStartTime by remember { mutableLongStateOf(0L) }
     var totalDragDistance by remember { mutableFloatStateOf(0f) }
@@ -266,7 +249,6 @@ private fun NewMiniPlayer(
 
     LaunchedEffect(mediaMetadata?.id, miniPlayerBackground) {
         gradientColors = emptyList()
-        // GRADIENT aur ANIMATED_MESH dono ko palette ki zaroorat hoti hai
         if (miniPlayerBackground == MiniPlayerBackgroundStyle.GRADIENT || 
             miniPlayerBackground == MiniPlayerBackgroundStyle.ANIMATED_MESH) {
             val url = mediaMetadata?.thumbnailUrl
@@ -305,7 +287,6 @@ private fun NewMiniPlayer(
         }
     }
 
-    // Memoize colors
     val backgroundColor = when (miniPlayerBackground) {
         MiniPlayerBackgroundStyle.DEFAULT    -> MaterialTheme.colorScheme.surfaceContainer
         MiniPlayerBackgroundStyle.TRANSPARENT -> Color.Black.copy(alpha = 0.25f)
@@ -451,7 +432,6 @@ private fun NewMiniPlayer(
                         MaterialTheme.colorScheme.surfaceContainer,
                         MaterialTheme.colorScheme.surfaceContainer,
                     )
-                    // Replace with AnimatedMeshBackground if available
                     Box(
                         Modifier
                             .fillMaxSize()
@@ -467,7 +447,6 @@ private fun NewMiniPlayer(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 8.dp),
             ) {
-                // Play button with progress - isolated composable
                 NewMiniPlayerPlayButton(
                     progressState = progressState,
                     playbackState = playbackState,
@@ -482,7 +461,6 @@ private fun NewMiniPlayer(
 
                 Spacer(modifier = Modifier.width(16.dp))
 
-                // Song info - isolated composable
                 NewMiniPlayerSongInfo(
                     mediaMetadata = mediaMetadata,
                     onSurfaceColor = onSurfaceColor,
@@ -492,7 +470,6 @@ private fun NewMiniPlayer(
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                // Cast indicator
                 if (isCasting) {
                     Icon(
                         painter = painterResource(R.drawable.cast_connected),
@@ -503,7 +480,6 @@ private fun NewMiniPlayer(
                     Spacer(modifier = Modifier.width(12.dp))
                 }
 
-                // Subscribe button - isolated composable
                 mediaMetadata?.let { metadata ->
                     metadata.artists.firstOrNull()?.id?.let { artistId ->
                         SubscribeButton(
@@ -518,7 +494,6 @@ private fun NewMiniPlayer(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Add to playlist button - isolated composable
                 mediaMetadata?.let { metadata ->
                     AddToPlaylistButton(
                         onClick = {
@@ -537,7 +512,6 @@ private fun NewMiniPlayer(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Favorite button - isolated composable
                 mediaMetadata?.let { FavoriteButton(
                     songId = it.id,
                     errorColor = errorColor,
@@ -550,10 +524,6 @@ private fun NewMiniPlayer(
     }
 }
 
-/**
- * Play button with circular progress indicator
- * Uses drawWithContent to update progress without recomposition
- */
 @Composable
 private fun NewMiniPlayerPlayButton(
     progressState: ProgressState,
@@ -636,7 +606,6 @@ private fun NewMiniPlayerPlayButton(
             ThumbnailImage(
                 item = playerConnection.player.currentMediaItem,
                 isActive = true,
-                isPlaying = effectiveIsPlaying,
                 artworkUri = mediaMetadata?.thumbnailUrl,
                 cropArtwork = true,
                 playerStyleName = playerStyleName,
@@ -991,7 +960,6 @@ private fun LegacyMiniMediaInfo(
     val error by LocalPlayerConnection.current?.error?.collectAsState() ?: remember { mutableStateOf(null) }
     val cropAlbumArt by rememberPreference(CropAlbumArtKey, false)
     val playerConnection = LocalPlayerConnection.current ?: return
-    val isPlaying by playerConnection.isPlaying.collectAsState()
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -1014,7 +982,6 @@ private fun LegacyMiniMediaInfo(
             ThumbnailImage(
                 item = playerConnection.player.currentMediaItem,
                 isActive = true,
-                isPlaying = isPlaying,
                 artworkUri = mediaMetadata.thumbnailUrl,
                 cropArtwork = cropAlbumArt,
                 playerStyleName = "LEGACY",
@@ -1196,14 +1163,13 @@ private fun FavoriteButton(
 }
 
 /**
- * 🚀 NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 🚀
+ * NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun ThumbnailImage(
     item: androidx.media3.common.MediaItem?,
     isActive: Boolean,
-    isPlaying: Boolean,
     artworkUri: String?,
     cropArtwork: Boolean,
     playerStyleName: String,
@@ -1215,11 +1181,18 @@ private fun ThumbnailImage(
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
 
+    // Safe Regex to prevent grey box 
     val highResUri = remember(artworkUri) {
-        artworkUri?.replace(Regex("=[wh]\\d+-[wh]\\d+.*"), "=w1080-h1080-l90-rj")
-            ?.replace(Regex("-[wh]\\d+-[wh]\\d+.*"), "-w1080-h1080-l90-rj")
-            ?.replace(Regex("=s\\d+.*"), "=s1080-l90-rj")
-    } ?: artworkUri
+        if (artworkUri == null) return@remember null
+        val isGoogleImage = artworkUri.contains("googleusercontent.com") || artworkUri.contains("ggpht.com")
+        if (isGoogleImage) {
+            artworkUri.replace(Regex("=w\\d+-h\\d+.*"), "=w1080-h1080")
+                      .replace(Regex("-w\\d+-h\\d+.*"), "-w1080-h1080")
+                      .replace(Regex("=s\\d+.*"), "=w1080-h1080")
+        } else {
+            artworkUri
+        }
+    }
 
     Box(
         modifier = modifier
@@ -1232,10 +1205,6 @@ private fun ThumbnailImage(
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(highResUri) 
-                .memoryCachePolicy(CachePolicy.ENABLED)
-                .diskCachePolicy(CachePolicy.ENABLED)
-                .networkCachePolicy(CachePolicy.ENABLED)
-                .crossfade(true)
                 .build(),
             contentDescription = null,
             contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
@@ -1247,11 +1216,7 @@ private fun ThumbnailImage(
                 CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
 
-            LaunchedEffect(isPlaying) {
-                if (exoPlayer.playWhenReady != isPlaying) {
-                    exoPlayer.playWhenReady = isPlaying
-                }
-            }
+            //  LaunchedEffect deleted so it NEVER pauses on song pause! 
 
             DisposableEffect(exoPlayer) {
                 val listener = object : Player.Listener {
