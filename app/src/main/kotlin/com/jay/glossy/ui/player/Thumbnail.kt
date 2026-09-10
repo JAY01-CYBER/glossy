@@ -80,6 +80,7 @@ import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.j.glossycanvas.core.providers.MonochromeApiCanvas
 import com.jay.glossy.LocalListenTogetherManager
 import com.jay.glossy.LocalPlayerConnection
 import com.jay.glossy.constants.CropAlbumArtKey
@@ -96,7 +97,6 @@ import com.jay.glossy.listentogether.RoomRole
 import com.jay.glossy.ui.component.CastButton
 import com.jay.glossy.utils.rememberEnumPreference
 import com.jay.glossy.utils.rememberPreference
-import com.j.glossycanvas.core.providers.MonochromeApiCanvas
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
