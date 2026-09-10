@@ -5,9 +5,13 @@
 
 package com.jay.glossy.ui.player
 
-import com.jay.glossy.R
-
+import android.content.Context
+import android.view.TextureView
+import android.view.ViewGroup
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -42,9 +46,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -53,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -70,8 +74,11 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -83,6 +90,7 @@ import coil3.request.crossfade
 import com.j.glossycanvas.core.providers.MonochromeApiCanvas
 import com.jay.glossy.LocalListenTogetherManager
 import com.jay.glossy.LocalPlayerConnection
+import com.jay.glossy.R
 import com.jay.glossy.constants.CropAlbumArtKey
 import com.jay.glossy.constants.HidePlayerThumbnailKey
 import com.jay.glossy.constants.PlayerBackgroundStyle
@@ -101,10 +109,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-/**
- * Pre-calculated thumbnail dimensions to avoid repeated calculations during recomposition.
- * All values are computed once and cached.
- */
 @Immutable
 data class ThumbnailDimensions(
     val itemWidth: Dp,
@@ -113,19 +117,12 @@ data class ThumbnailDimensions(
     val cornerRadius: Dp
 )
 
-/**
- * Cached media items data to prevent recalculation on every recomposition.
- */
 @Immutable
 data class MediaItemsData(
     val items: List<MediaItem>,
     val currentIndex: Int
 )
 
-/**
- * Calculate thumbnail dimensions once based on container size.
- * This function is marked as @Stable to indicate it produces stable results.
- */
 @Stable
 private fun calculateThumbnailDimensions(
     containerWidth: Dp,
@@ -147,10 +144,6 @@ private fun calculateThumbnailDimensions(
     )
 }
 
-/**
- * Get media items for the thumbnail carousel.
- * Calculates previous, current, and next items based on shuffle mode.
- */
 @Stable
 private fun getMediaItems(
     player: Player,
@@ -192,10 +185,6 @@ private fun getMediaItems(
     return MediaItemsData(items, currentMediaIndex)
 }
 
-/**
- * Get text color based on player background style.
- * Computed once per background style change.
- */
 @Stable
 @Composable
 private fun getTextColor(playerBackground: PlayerBackgroundStyle): Color {
@@ -206,6 +195,23 @@ private fun getTextColor(playerBackground: PlayerBackgroundStyle): Color {
         PlayerBackgroundStyle.ANIMATED_MESH -> Color.White
     }
 }
+
+private fun normalizeCanvasSongTitle(raw: String): String = raw
+    .replace(Regex("\\s*\\[[^]]*]"), "")
+    .replace(Regex("\\s*\\((?:feat\\.?|ft\\.?|featuring|with)\\b[^)]*\\)", RegexOption.IGNORE_CASE), "")
+    .replace(Regex("\\s*\\((?:from|official\\s*)?(?:music\\s*)?(?:video|mv|lyrics?|audio|visualizer|live|remaster(?:ed)?|version|edit|mix|remix)[^)]*\\)", RegexOption.IGNORE_CASE), "")
+    .replace(Regex("\\s*-\\s*(?:from|official\\s*)?(?:music\\s*)?(?:video|mv|lyrics?|audio|visualizer|live|remaster(?:ed)?|version|edit|mix|remix)\\b.*$", RegexOption.IGNORE_CASE), "")
+    .replace(Regex("\\s+"), " ")
+    .trim()
+    .trim('-')
+    .trim()
+
+private fun normalizeCanvasArtistName(raw: String): String = raw
+    .split(Regex("(?:\\s*,\\s*|\\s*&\\s*|\\s+×\\s+|\\s+x\\s+|\\bfeat\\.?\\b|\\bft\\.?\\b|\\bfeaturing\\b|\\bwith\\b)", RegexOption.IGNORE_CASE), limit = 2)
+    .firstOrNull()
+    .orEmpty()
+    .replace(Regex("\\s+"), " ")
+    .trim()
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -220,14 +226,13 @@ fun Thumbnail(
     val context = LocalContext.current
     val layoutDirection = LocalLayoutDirection.current
 
-    // Collect states
     val mediaMetadata by playerConnection.mediaMetadata.collectAsState()
     val error by playerConnection.error.collectAsState()
     val queueTitle by playerConnection.queueTitle.collectAsStateWithLifecycle()
     val canSkipPrevious by playerConnection.canSkipPrevious.collectAsStateWithLifecycle()
     val canSkipNext by playerConnection.canSkipNext.collectAsStateWithLifecycle()
+    val isPlaying by playerConnection.isPlaying.collectAsState()
 
-    // Preferences - computed once
     val swipeThumbnailPref by rememberPreference(SwipeThumbnailKey, true)
     val swipeThumbnail = swipeThumbnailPref && !isListenTogetherGuest
     val hidePlayerThumbnail by rememberPreference(HidePlayerThumbnailKey, false)
@@ -242,46 +247,34 @@ fun Thumbnail(
         defaultValue = PlayerStyle.MODERN
     )
     
-    // Pre-calculate text color based on background style
     val textBackgroundColor = getTextColor(playerBackground)
-    
-    // Grid state
     val thumbnailLazyGridState = rememberLazyGridState()
     
-    // Calculate media items data - memoized
     val mediaItemsData by remember(
         playerConnection.player.currentMediaItemIndex,
         playerConnection.player.shuffleModeEnabled,
         swipeThumbnail,
         mediaMetadata
     ) {
-        derivedStateOf {
-            getMediaItems(playerConnection.player, swipeThumbnail)
-        }
+        derivedStateOf { getMediaItems(playerConnection.player, swipeThumbnail) }
     }
     
     val mediaItems = mediaItemsData.items
     val currentMediaIndex = mediaItemsData.currentIndex
 
-    // Snap behavior - created once per grid state
     val thumbnailSnapLayoutInfoProvider = remember(thumbnailLazyGridState) {
         ThumbnailSnapLayoutInfoProvider(
             lazyGridState = thumbnailLazyGridState,
-            positionInLayout = { layoutSize, itemSize ->
-                (layoutSize / 2f - itemSize / 2f)
-            },
+            positionInLayout = { layoutSize, itemSize -> (layoutSize / 2f - itemSize / 2f) },
             velocityThreshold = 500f
         )
     }
 
-    // Current item tracking - derived state for efficiency
     val currentItem by remember { derivedStateOf { thumbnailLazyGridState.firstVisibleItemIndex } }
     val itemScrollOffset by remember { derivedStateOf { thumbnailLazyGridState.firstVisibleItemScrollOffset } }
 
-    // Handle swipe to change song
     LaunchedEffect(itemScrollOffset) {
         if (!thumbnailLazyGridState.isScrollInProgress || !swipeThumbnail || itemScrollOffset != 0 || currentMediaIndex < 0) return@LaunchedEffect
-
         if (currentItem > currentMediaIndex && canSkipNext) {
             playerConnection.player.seekToNext()
         } else if (currentItem < currentMediaIndex && canSkipPrevious) {
@@ -289,7 +282,6 @@ fun Thumbnail(
         }
     }
 
-    // Update position when song changes
     LaunchedEffect(mediaMetadata, canSkipPrevious, canSkipNext) {
         val index = maxOf(0, currentMediaIndex)
         if (index >= 0 && index < mediaItems.size) {
@@ -308,55 +300,36 @@ fun Thumbnail(
         }
     }
 
-    // Seek effect state
     var showSeekEffect by remember { mutableStateOf(false) }
     var seekDirection by remember { mutableStateOf("") }
 
-    Box(
-        modifier = modifier
-            .graphicsLayer {
-                compositingStrategy = CompositingStrategy.Offscreen
-            }
-    ) {
-        // Error view
+    Box(modifier = modifier) {
         AnimatedVisibility(
             visible = error != null,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier
-                .padding(32.dp)
-                .align(Alignment.Center),
+            modifier = Modifier.padding(32.dp).align(Alignment.Center),
         ) {
             error?.let { playbackError ->
-                PlaybackError(
-                    error = playbackError,
-                    retry = playerConnection.player::prepare,
-                )
+                PlaybackError(error = playbackError, retry = playerConnection.player::prepare)
             }
         }
 
-        // Main thumbnail view
         AnimatedVisibility(
             visible = error == null,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier
-                .fillMaxSize()
-                .then(if (!isLandscape) Modifier.statusBarsPadding() else Modifier),
+            modifier = Modifier.fillMaxSize().then(if (!isLandscape) Modifier.statusBarsPadding() else Modifier),
         ) {
             Column(
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = if (isLandscape) Arrangement.Center else Arrangement.Top
             ) {
-                // Now Playing header - hide in landscape mode
                 if (!isLandscape) {
-                    
-                    // Spacer ADDED ABOVE header for VIVI_NEW to push text down like Modern style
                     if (playerStyle.name == "VIVI_NEW") {
                         Spacer(modifier = Modifier.height(28.dp))
                     }
-                    
                     ThumbnailHeader(
                         queueTitle = queueTitle, 
                         albumTitle = mediaMetadata?.album?.title, 
@@ -365,14 +338,9 @@ fun Thumbnail(
                     )
                 }
                 
-                // Thumbnail content
                 BoxWithConstraints(
                     contentAlignment = if (isLandscape) Alignment.Center else if (playerStyle.name == "VIVI_NEW") Alignment.TopCenter else Alignment.Center,
-                    modifier = if (isLandscape) {
-                        Modifier.weight(1f, false)
-                    } else {
-                        Modifier.fillMaxSize()
-                    }
+                    modifier = if (isLandscape) Modifier.weight(1f, false) else Modifier.fillMaxSize()
                 ) {
                     val dimensions = remember(maxWidth, maxHeight, isLandscape) {
                         calculateThumbnailDimensions(
@@ -393,7 +361,6 @@ fun Thumbnail(
                         derivedStateOf { swipeThumbnail && isPlayerExpanded() }
                     }
                     
-                    // VIVI_NEW OVERRIDE
                     if (playerStyle.name == "VIVI_NEW" && !isLandscape) {
                         val currentMedia = mediaItems.getOrNull(currentMediaIndex)
                         val incrementalSeekSkipEnabled by rememberPreference(SeekExtraSeconds, defaultValue = false)
@@ -421,9 +388,7 @@ fun Thumbnail(
                                                     playerConnection.player.seekToPreviousMediaItem()
                                                 }
                                             },
-                                            onHorizontalDrag = { change, dragAmount ->
-                                                totalDrag += dragAmount
-                                            }
+                                            onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount }
                                         )
                                     }
                                     .pointerInput(Unit) {
@@ -471,6 +436,7 @@ fun Thumbnail(
                                         ThumbnailImage(
                                             item = currentMedia,
                                             isActive = isActive,
+                                            isPlaying = isPlaying,
                                             artworkUri = artworkUriToUse,
                                             cropArtwork = cropAlbumArt,
                                             playerStyleName = playerStyle.name
@@ -498,14 +464,13 @@ fun Thumbnail(
                         ) {
                             items(
                                 items = mediaItems,
-                                key = { item -> 
-                                    item.mediaId.ifEmpty { "unknown_${item.hashCode()}" }
-                                }
+                                key = { item -> item.mediaId.ifEmpty { "unknown_${item.hashCode()}" } }
                             ) { item ->
                                 val isActive = item.mediaId == mediaMetadata?.id
                                 ThumbnailItem(
                                     item = item,
                                     isActive = isActive,
+                                    isPlaying = isPlaying,
                                     dimensions = dimensions,
                                     hidePlayerThumbnail = hidePlayerThumbnail,
                                     cropAlbumArt = cropAlbumArt,
@@ -527,7 +492,6 @@ fun Thumbnail(
             }
         }
 
-        // Seek effect
         LaunchedEffect(showSeekEffect) {
             if (showSeekEffect) {
                 delay(1000)
@@ -546,9 +510,6 @@ fun Thumbnail(
     }
 }
 
-/**
- * Header component showing "Now Playing" and queue/album title.
- */
 @Composable
 private fun ThumbnailHeader(
     queueTitle: String?,
@@ -559,7 +520,6 @@ private fun ThumbnailHeader(
 ) {
     val listenTogetherManager = LocalListenTogetherManager.current
     val listenTogetherRoleState = listenTogetherManager?.role?.collectAsStateWithLifecycle(initialValue = RoomRole.NONE)
-    val isListenTogetherGuest = listenTogetherRoleState?.value == RoomRole.GUEST
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -600,13 +560,11 @@ private fun ThumbnailHeader(
     }
 }
 
-/**
- * Individual thumbnail item in the carousel for standard styles.
- */
 @Composable
 private fun ThumbnailItem(
     item: MediaItem,
     isActive: Boolean,
+    isPlaying: Boolean,
     dimensions: ThumbnailDimensions,
     hidePlayerThumbnail: Boolean,
     cropAlbumArt: Boolean,
@@ -614,7 +572,7 @@ private fun ThumbnailItem(
     layoutDirection: LayoutDirection,
     onSeek: (String, Boolean) -> Unit,
     playerConnection: com.jay.glossy.playback.PlayerConnection,
-    context: android.content.Context,
+    context: Context,
     isLandscape: Boolean = false,
     isListenTogetherGuest: Boolean = false,
     currentMediaId: String? = null,
@@ -632,23 +590,16 @@ private fun ThumbnailItem(
                 if (isLandscape) {
                     Modifier.size(dimensions.thumbnailSize + (PlayerHorizontalPadding * 2))
                 } else {
-                    Modifier
-                        .width(dimensions.itemWidth)
-                        .fillMaxSize()
+                    Modifier.width(dimensions.itemWidth).fillMaxSize()
                 }
             )
             .padding(horizontal = PlayerHorizontalPadding)
-            .graphicsLayer {
-                compositingStrategy = CompositingStrategy.Offscreen
-            }
             .pointerInput(Unit) {
                 detectTapGestures(
                     onDoubleTap = { offset ->
                         if (isListenTogetherGuest) return@detectTapGestures
-
                         val currentPosition = playerConnection.player.currentPosition
                         val duration = playerConnection.player.duration
-
                         val now = System.currentTimeMillis()
                         if (incrementalSeekSkipEnabled && now - lastTapTime < 1000) {
                             skipMultiplier++
@@ -656,9 +607,7 @@ private fun ThumbnailItem(
                             skipMultiplier = 1
                         }
                         lastTapTime = now
-
                         val skipAmount = 5000 * skipMultiplier
-
                         val isLeftSide = (layoutDirection == LayoutDirection.Ltr && offset.x < size.width / 2) ||
                                 (layoutDirection == LayoutDirection.Rtl && offset.x > size.width / 2)
 
@@ -694,6 +643,7 @@ private fun ThumbnailItem(
                 ThumbnailImage(
                     item = item,
                     isActive = isActive,
+                    isPlaying = isPlaying,
                     artworkUri = artworkUriToUse,
                     cropArtwork = cropAlbumArt,
                     playerStyleName = playerStyleName
@@ -701,18 +651,13 @@ private fun ThumbnailItem(
             }
             
             CastButton(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp),
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
                 tintColor = textBackgroundColor
             )
         }
     }
 }
 
-/**
- * Placeholder shown when thumbnail is hidden.
- */
 @Composable
 private fun HiddenThumbnailPlaceholder(
     textBackgroundColor: Color,
@@ -737,12 +682,14 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- * Enhanced Thumbnail image with GlossyCanvas-Core integration, ExoPlayer, and DEBUG STATUS.
+ * TextureView & onRenderedFirstFrame based Canvas video player
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun ThumbnailImage(
     item: MediaItem?,
     isActive: Boolean,
+    isPlaying: Boolean,
     artworkUri: String?,
     cropArtwork: Boolean,
     playerStyleName: String,
@@ -750,39 +697,28 @@ private fun ThumbnailImage(
 ) {
     val context = LocalContext.current
     var canvasVideoUrl by remember(item?.mediaId) { mutableStateOf<String?>(null) }
-    var isVideoError by remember(item?.mediaId) { mutableStateOf(false) }
-    
-    // DEBUG STATE - स्क्रीन पर एरर देखने के लिए
-    var debugStatus by remember(item?.mediaId) { mutableStateOf("⏳ Wait...") }
+    var isVideoReady by remember(item?.mediaId) { mutableStateOf(false) }
 
-    // Background execution to fetch Canvas URL
     LaunchedEffect(item?.mediaId) {
         if (item == null) return@LaunchedEffect
-        val title = item.mediaMetadata.title?.toString()
-        val artist = item.mediaMetadata.artist?.toString() ?: ""
+        val titleRaw = item.mediaMetadata.title?.toString() ?: ""
+        val artistRaw = item.mediaMetadata.artist?.toString() ?: ""
         
-        if (!title.isNullOrBlank()) {
-            debugStatus = "🔍 $title"
+        val cleanTitle = normalizeCanvasSongTitle(titleRaw)
+        val cleanArtist = normalizeCanvasArtistName(artistRaw)
+
+        if (cleanTitle.isNotBlank()) {
             withContext(Dispatchers.IO) {
                 try {
                     val canvasData = MonochromeApiCanvas.getBySongArtist(
-                        song = title,
-                        artist = artist
+                        song = cleanTitle,
+                        artist = cleanArtist
                     )
-                    val url = canvasData?.preferredAnimationUrl
-                    
                     withContext(Dispatchers.Main) {
-                        if (url != null) {
-                            debugStatus = "✅ URL Found!"
-                            canvasVideoUrl = url
-                        } else {
-                            debugStatus = "❌ No Canvas API"
-                        }
+                        canvasVideoUrl = canvasData?.preferredAnimationUrl
                     }
-                } catch(e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        debugStatus = "⚠️ API Error"
-                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         }
@@ -791,90 +727,108 @@ private fun ThumbnailImage(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .then(
                 if (playerStyleName == "VIVI_NEW") Modifier 
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
-        if (canvasVideoUrl != null && isActive && !isVideoError) {
-            val exoPlayer = remember(context) {
+        // Base Album Artwork (Always Present)
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(artworkUri)
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .networkCachePolicy(CachePolicy.ENABLED)
+                .crossfade(true)
+                .build(),
+            contentDescription = null,
+            contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // TextureView Canvas Player Layer
+        if (canvasVideoUrl != null && isActive) {
+            val exoPlayer = remember(canvasVideoUrl) {
                 ExoPlayer.Builder(context).build().apply {
-                    repeatMode = Player.REPEAT_MODE_ALL
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(C.USAGE_MEDIA)
+                            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                            .build(),
+                        false
+                    )
                     volume = 0f
-                    
-                    addListener(object : Player.Listener {
-                        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                            debugStatus = "🎥 Error ${error.errorCode}"
-                            isVideoError = true
-                        }
-                    })
+                    repeatMode = Player.REPEAT_MODE_ONE
+                    playWhenReady = isPlaying
+                }
+            }
+
+            LaunchedEffect(isPlaying) {
+                exoPlayer.playWhenReady = isPlaying
+            }
+
+            DisposableEffect(exoPlayer) {
+                val listener = object : Player.Listener {
+                    override fun onRenderedFirstFrame() {
+                        isVideoReady = true
+                    }
+                }
+                exoPlayer.addListener(listener)
+                onDispose {
+                    exoPlayer.removeListener(listener)
+                    exoPlayer.release()
                 }
             }
 
             LaunchedEffect(canvasVideoUrl) {
-                try {
-                    exoPlayer.setMediaItem(MediaItem.fromUri(canvasVideoUrl!!))
-                    exoPlayer.prepare()
-                    exoPlayer.playWhenReady = true
-                    debugStatus = "▶️ Playing"
-                } catch (e: Exception) {
-                    debugStatus = "🎥 Setup Error"
-                    isVideoError = true
-                }
+                val url = canvasVideoUrl!!.trim()
+                val mimeType = if (url.lowercase().contains("mp4")) MimeTypes.VIDEO_MP4 else MimeTypes.APPLICATION_M3U8
+                exoPlayer.stop()
+                exoPlayer.setMediaItem(MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
+                exoPlayer.prepare()
+                exoPlayer.playWhenReady = isPlaying
             }
 
-            DisposableEffect(exoPlayer) {
-                onDispose { exoPlayer.release() }
-            }
+            val alphaAnim by animateFloatAsState(
+                targetValue = if (isVideoReady) 1f else 0f,
+                animationSpec = tween(400),
+                label = "canvasFadeIn"
+            )
 
             AndroidView(
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        useController = false
+                factory = { viewContext ->
+                    PlayerView(viewContext).apply {
+                        layoutParams = ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
                         player = exoPlayer
+                        useController = false
                         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                        setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+
+                        val textureView = TextureView(viewContext).apply {
+                            layoutParams = ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                            isOpaque = false
+                        }
+
+                        val surfaceParent = this.videoSurfaceView?.parent as? ViewGroup
+                        if (surfaceParent != null) {
+                            val index = surfaceParent.indexOfChild(this.videoSurfaceView)
+                            surfaceParent.removeView(this.videoSurfaceView)
+                            surfaceParent.addView(textureView, index)
+                        }
+                        exoPlayer.setVideoTextureView(textureView)
                     }
                 },
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(artworkUri)
-                    .memoryCachePolicy(CachePolicy.ENABLED)
-                    .diskCachePolicy(CachePolicy.ENABLED)
-                    .networkCachePolicy(CachePolicy.ENABLED)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = null,
-                contentScale = if (cropArtwork || playerStyleName == "VIVI_NEW") ContentScale.Crop else ContentScale.Fit,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-        
-        // DEBUG UI: एल्बम आर्ट के कोने में एक छोटा सा ब्लैक बॉक्स दिखेगा
-        // इसे केवल Active गाने के लिए दिखा रहे हैं ताकि UI भरा-भरा ना लगे।
-        if (isActive) {
-            Text(
-                text = debugStatus,
-                color = Color.White,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
+                update = { view ->
+                    if (view.player !== exoPlayer) view.player = exoPlayer
+                },
                 modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(8.dp)
-                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
-                    .padding(6.dp)
+                    .fillMaxSize()
+                    .alpha(alphaAnim)
             )
         }
     }
 }
 
-/**
- * Seek effect overlay showing seek direction.
- */
 @Composable
 private fun SeekEffectOverlay(
     seekDirection: String,
