@@ -101,6 +101,7 @@ import com.jay.glossy.constants.SeekExtraSeconds
 import com.jay.glossy.constants.SwipeThumbnailKey
 import com.jay.glossy.constants.ThumbnailCornerRadius
 import com.jay.glossy.constants.EnableCanvasKey
+import com.jay.glossy.constants.MaxCanvasCacheSizeKey
 import com.jay.glossy.listentogether.RoomRole
 import com.jay.glossy.ui.component.CastButton
 import com.jay.glossy.utils.rememberEnumPreference
@@ -659,7 +660,7 @@ private fun HiddenThumbnailPlaceholder(
 }
 
 /**
- *  NO API CALLS IN UI: Reads pre-fetched URL straight from PlayerConnection 
+ * 🚀 FAST ORIGINAL THUMBNAILS + TRUE DISK CACHED CANVAS VIDEO 🚀
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
@@ -673,8 +674,8 @@ private fun ThumbnailImage(
     val context = LocalContext.current
     val playerConnection = LocalPlayerConnection.current ?: return
     
-    // READ SETTINGS: Toggle Canvas 
     val isCanvasEnabled by rememberPreference(EnableCanvasKey, true)
+    val maxCanvasCacheSize by rememberPreference(MaxCanvasCacheSizeKey, 256)
     
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
@@ -687,7 +688,7 @@ private fun ThumbnailImage(
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
-        // ORIGINAL FAST IMAGE LOADING 
+        // 🚀 USER'S ORIGINAL FAST IMAGE LOADING 🚀
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(artworkUri) 
@@ -704,7 +705,7 @@ private fun ThumbnailImage(
         // Only Render Video if Canvas is Enabled
         if (isCanvasEnabled && canvasVideoUrl != null && isActive) {
             val exoPlayer = remember(canvasVideoUrl) {
-                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
+                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!, maxCanvasCacheSize)
             }
 
             DisposableEffect(exoPlayer) {
