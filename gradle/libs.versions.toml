@@ -42,7 +42,7 @@ kuromojiIpadic = "0.9.0"
 extractor = "3cd3341"
 tinypinyin = "2.0.3"
 protobuf = "4.35.1"
-glossyCanvasCore = "0.0.4"
+glossyCanvasCore = "0.0.5"
 
 [libraries]
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
