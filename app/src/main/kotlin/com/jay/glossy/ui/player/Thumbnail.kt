@@ -101,7 +101,6 @@ import com.jay.glossy.constants.SeekExtraSeconds
 import com.jay.glossy.constants.SwipeThumbnailKey
 import com.jay.glossy.constants.ThumbnailCornerRadius
 import com.jay.glossy.constants.EnableCanvasKey
-import com.jay.glossy.constants.MaxCanvasCacheSizeKey
 import com.jay.glossy.listentogether.RoomRole
 import com.jay.glossy.ui.component.CastButton
 import com.jay.glossy.utils.rememberEnumPreference
@@ -659,9 +658,6 @@ private fun HiddenThumbnailPlaceholder(
     }
 }
 
-/**
- * 🚀 FAST ORIGINAL THUMBNAILS + TRUE DISK CACHED CANVAS VIDEO 🚀
- */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun ThumbnailImage(
@@ -675,7 +671,6 @@ private fun ThumbnailImage(
     val playerConnection = LocalPlayerConnection.current ?: return
     
     val isCanvasEnabled by rememberPreference(EnableCanvasKey, true)
-    val maxCanvasCacheSize by rememberPreference(MaxCanvasCacheSizeKey, 256)
     
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
@@ -688,7 +683,6 @@ private fun ThumbnailImage(
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
-        // 🚀 USER'S ORIGINAL FAST IMAGE LOADING 🚀
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(artworkUri) 
@@ -702,16 +696,24 @@ private fun ThumbnailImage(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Only Render Video if Canvas is Enabled
         if (isCanvasEnabled && canvasVideoUrl != null && isActive) {
             val exoPlayer = remember(canvasVideoUrl) {
-                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!, maxCanvasCacheSize)
+                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
 
             DisposableEffect(exoPlayer) {
+                if (exoPlayer.playbackState == Player.STATE_READY) {
+                    isVideoReady = true
+                }
+                
                 val listener = object : Player.Listener {
                     override fun onRenderedFirstFrame() {
                         isVideoReady = true
+                    }
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (playbackState == Player.STATE_READY) {
+                            isVideoReady = true
+                        }
                     }
                 }
                 exoPlayer.addListener(listener)
