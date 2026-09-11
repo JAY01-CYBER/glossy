@@ -124,7 +124,6 @@ import com.jay.glossy.constants.SwipeThumbnailKey
 import com.jay.glossy.constants.ThumbnailCornerRadius
 import com.jay.glossy.constants.UseNewMiniPlayerDesignKey
 import com.jay.glossy.constants.EnableCanvasKey
-import com.jay.glossy.constants.MaxCanvasCacheSizeKey
 import com.jay.glossy.db.entities.ArtistEntity
 import com.jay.glossy.listentogether.ListenTogetherManager
 import com.metrolist.models.MediaMetadata
@@ -625,7 +624,6 @@ private fun NewMiniPlayerPlayButton(
                 modifier = Modifier.fillMaxSize().clip(CircleShape)
             )
 
-            // Always observe playing state directly so UI overlay matches what's playing
             val isPlaying by playerConnection.isPlaying.collectAsState()
 
             if (isListenTogetherGuest && isMuted ||
@@ -899,7 +897,6 @@ private fun LegacyMiniPlayer(
             }
         }
 
-        // Swipe indicator
         if (offsetXAnimatable.value.absoluteValue > 50f) {
             Box(
                 modifier =
@@ -1181,9 +1178,6 @@ private fun FavoriteButton(
     }
 }
 
-/**
- * 🚀 FAST ORIGINAL THUMBNAILS + TRUE DISK CACHED CANVAS VIDEO 🚀
- */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun ThumbnailImage(
@@ -1196,8 +1190,7 @@ private fun ThumbnailImage(
     val context = LocalContext.current
     val playerConnection = LocalPlayerConnection.current ?: return
     
-    val isCanvasEnabled by rememberPreference(com.jay.glossy.constants.EnableCanvasKey, true)
-    val maxCanvasCacheSize by rememberPreference(com.jay.glossy.constants.MaxCanvasCacheSizeKey, 256)
+    val isCanvasEnabled by rememberPreference(EnableCanvasKey, true)
     
     val canvasVideoUrl by playerConnection.currentCanvasUrl.collectAsState()
     var isVideoReady by remember(canvasVideoUrl) { mutableStateOf(false) }
@@ -1210,7 +1203,6 @@ private fun ThumbnailImage(
                 else Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
             )
     ) {
-        // 🚀 USER'S ORIGINAL FAST IMAGE LOADING 🚀
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(artworkUri) 
@@ -1224,16 +1216,24 @@ private fun ThumbnailImage(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Only Render Video if Canvas is Enabled
         if (isCanvasEnabled && canvasVideoUrl != null && isActive) {
             val exoPlayer = remember(canvasVideoUrl) {
-                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!, maxCanvasCacheSize)
+                CanvasPlayerCache.getPlayer(context, canvasVideoUrl!!)
             }
 
             DisposableEffect(exoPlayer) {
+                if (exoPlayer.playbackState == Player.STATE_READY) {
+                    isVideoReady = true
+                }
+                
                 val listener = object : Player.Listener {
                     override fun onRenderedFirstFrame() {
                         isVideoReady = true
+                    }
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (playbackState == Player.STATE_READY) {
+                            isVideoReady = true
+                        }
                     }
                 }
                 exoPlayer.addListener(listener)
