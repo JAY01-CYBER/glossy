@@ -63,6 +63,7 @@ import com.jay.glossy.ui.component.Material3SettingsGroup
 import com.jay.glossy.ui.component.Material3SettingsItem
 import android.text.format.Formatter
 import com.jay.glossy.playback.CanvasPlayerCache
+import com.jay.glossy.playback.CanvasArtworkPlaybackCache
 import com.jay.glossy.ui.utils.backToMain
 import com.jay.glossy.utils.rememberPreference
 import kotlinx.coroutines.Dispatchers
@@ -88,7 +89,6 @@ fun StorageSettings(
     val coroutineScope = rememberCoroutineScope()
     val songCacheString = stringResource(R.string.song_cache).lowercase()
     val imageCacheString = stringResource(R.string.image_cache).lowercase()
-    val canvasCacheString = "canvas cache"
 
     val (maxImageCacheSize, onMaxImageCacheSizeChange) = rememberPreference(
         key = MaxImageCacheSizeKey,
@@ -103,22 +103,14 @@ fun StorageSettings(
         defaultValue = true
     )
     
-    // 🚀 Canvas Preferences
-    val (enableCanvas, onEnableCanvasChange) = rememberPreference(
-        key = EnableCanvasKey, 
-        defaultValue = true
-    )
-    val (maxCanvasCacheSize, onMaxCanvasCacheSizeChange) = rememberPreference(
-        key = MaxCanvasCacheSizeKey, 
-        defaultValue = 256
-    )
+    //  Canvas Cache Prefs (M3-Play exact match)
+    val (maxCanvasCacheSize, onMaxCanvasCacheSizeChange) = rememberPreference(MaxCanvasCacheSizeKey, defaultValue = 256)
 
     var clearDownloads by remember { mutableStateOf(false) }
     var clearCacheDialog by remember { mutableStateOf(false) }
     var clearImageCacheDialog by remember { mutableStateOf(false) }
     var clearCanvasCacheDialog by remember { mutableStateOf(false) }
 
-    // State for the confirmation dialog
     var showCacheWarningDialog by remember { mutableStateOf(false) }
     var cacheType by remember { mutableStateOf("") }
     var cacheUsage by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
@@ -133,7 +125,8 @@ fun StorageSettings(
     var downloadCacheSize by remember {
         mutableLongStateOf(tryOrNull { downloadCache.cacheSpace } ?: 0)
     }
-    var canvasCacheSize by remember { mutableLongStateOf(0L) }
+    var canvasCacheSize by remember { mutableStateOf(CanvasArtworkPlaybackCache.size()) }
+    var oldCanvasCacheSize by remember { mutableLongStateOf(0L) }
 
     val imageCacheProgress by animateFloatAsState(
         targetValue = (imageCacheSize.toFloat() / (maxImageCacheSize * 1024 * 1024L)).coerceIn(0f, 1f),
@@ -144,7 +137,7 @@ fun StorageSettings(
         label = "playerCacheProgress",
     )
     val canvasCacheProgress by animateFloatAsState(
-        targetValue = if (maxCanvasCacheSize > 0) (canvasCacheSize.toFloat() / (maxCanvasCacheSize * 1024 * 1024L)).coerceIn(0f, 1f) else 0f,
+        targetValue = if (maxCanvasCacheSize > 0) (canvasCacheSize.toFloat() / maxCanvasCacheSize).coerceIn(0f, 1f) else 0f,
         label = "canvasCacheProgress"
     )
 
@@ -168,9 +161,11 @@ fun StorageSettings(
             imageCacheSize = imageDiskCache.size
             playerCacheSize = tryOrNull { playerCache.cacheSpace } ?: 0
             downloadCacheSize = tryOrNull { downloadCache.cacheSpace } ?: 0
+            canvasCacheSize = CanvasArtworkPlaybackCache.size()
             
+            // Check for the old heavy cache folder to allow user to delete it
             val dir = File(context.cacheDir, "canvas_video_cache")
-            canvasCacheSize = if (dir.exists()) dir.walkTopDown().filter { it.isFile }.map { it.length() }.sum() else 0L
+            oldCanvasCacheSize = if (dir.exists()) dir.walkTopDown().filter { it.isFile }.map { it.length() }.sum() else 0L
         }
     }
 
@@ -236,11 +231,12 @@ fun StorageSettings(
             title = "Clear Canvas Cache",
             onDismiss = { clearCanvasCacheDialog = false },
             onConfirm = {
-                CanvasPlayerCache.clearCache(context)
+                CanvasArtworkPlaybackCache.clear()
+                CanvasPlayerCache.clearOldHeavyCache(context)
                 clearCanvasCacheDialog = false
             },
             onCancel = { clearCanvasCacheDialog = false },
-            content = { Text(text = "Are you sure you want to clear the canvas video cache? This will delete all downloaded canvas loops.") },
+            content = { Text(text = "Are you sure you want to clear the canvas cache? This will clear saved URLs and any old video storage.") },
         )
     }
 
@@ -365,57 +361,28 @@ fun StorageSettings(
             ),
         )
 
-        // 🚀 NEW: Canvas Cache Settings 🚀
+        // 🚀M3-PLAY STYLE CANVAS CACHE UI and Style
         Material3SettingsGroup(
             title = "Canvas Cache",
             items = listOf(
                 Material3SettingsItem(
                     icon = painterResource(R.drawable.cached),
-                    title = { Text("Enable Canvas") },
-                    description = { Text("Automatically download and play background canvas videos") },
-                    trailingContent = {
-                        Switch(
-                            checked = enableCanvas,
-                            onCheckedChange = onEnableCanvasChange,
-                            thumbContent = {
-                                Icon(
-                                    painter = painterResource(id = if (enableCanvas) R.drawable.check else R.drawable.close),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(SwitchDefaults.IconSize)
-                                )
-                            }
-                        )
-                    },
-                    onClick = { onEnableCanvasChange(!enableCanvas) }
-                ),
-                Material3SettingsItem(
-                    icon = painterResource(R.drawable.cached),
                     title = { Text("Max Canvas cache size") },
-                    enabled = enableCanvas,
                     description = {
-                        val canvasCacheValues = remember { listOf(0, 128, 256, 512, 1024, 2048, 4096) }
+                        val canvasCacheValues = remember { listOf(0, 64, 128, 256, 512, 1024) }
                         Column {
                             Text(
                                 text = when (maxCanvasCacheSize) {
                                     0 -> stringResource(R.string.disable)
-                                    else -> Formatter.formatShortFileSize(context, maxCanvasCacheSize * 1024 * 1024L)
+                                    else -> "$maxCanvasCacheSize items"
                                 }
                             )
                             Slider(
                                 value = canvasCacheValues.indexOf(maxCanvasCacheSize).toFloat(),
-                                enabled = enableCanvas,
                                 onValueChange = {
                                     val newValue = canvasCacheValues[it.roundToInt()]
-                                    val newLimitInBytes = newValue * 1024 * 1024L
-
-                                    if (newLimitInBytes < canvasCacheSize) {
-                                        cacheUsage = canvasCacheSize
-                                        cacheType = canvasCacheString
-                                        onConfirmAction = { onMaxCanvasCacheSizeChange(newValue) }
-                                        showCacheWarningDialog = true
-                                    } else {
-                                        onMaxCanvasCacheSizeChange(newValue)
-                                    }
+                                    onMaxCanvasCacheSizeChange(newValue)
+                                    CanvasArtworkPlaybackCache.setMaxSize(newValue)
                                 },
                                 steps = canvasCacheValues.size - 2,
                                 valueRange = 0f..(canvasCacheValues.size - 1).toFloat(),
@@ -427,7 +394,7 @@ fun StorageSettings(
                             )
                             Spacer(modifier = Modifier.padding(2.dp))
                             Text(
-                                text = "${Formatter.formatShortFileSize(context, canvasCacheSize)} / ${Formatter.formatShortFileSize(context, maxCanvasCacheSize * 1024 * 1024L)}",
+                                text = "$canvasCacheSize / $maxCanvasCacheSize items",
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                         }
