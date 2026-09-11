@@ -60,7 +60,6 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
-// EXACT M3-PLAY STYLE CANVAS URL CACHE (0 MB Storage) 
 object CanvasArtworkPlaybackCache {
     private var maxItems = 256
     private val cache = object : java.util.LinkedHashMap<String, String>(0, 0.75f, true) {
@@ -467,7 +466,8 @@ class PlayerConnection(
         scope.launch(Dispatchers.IO) {
             if (currentItem != null && CanvasArtworkPlaybackCache.get(currentItem.mediaId) == null) {
                 val url = fetchCanvasUrl(currentItem)
-                if (getPlayerOrNull()?.currentMediaItem?.mediaId == currentItem.mediaId) {
+                // 🚀 FIXED: Checking via StateFlow instead of ExoPlayer on IO thread 🚀
+                if (mediaMetadata.value?.id == currentItem.mediaId) {
                     currentCanvasUrl.value = url
                 }
             }
