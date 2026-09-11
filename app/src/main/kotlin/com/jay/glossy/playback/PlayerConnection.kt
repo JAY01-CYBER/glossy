@@ -1,5 +1,5 @@
 /**
- * Metrolist Project (C) 2026
+ * Glossy Project (C) 2026
  * Licensed under GPL-3.0 | See git history for contributors
  */
 
@@ -19,13 +19,7 @@ import androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM
 import androidx.media3.common.Player.REPEAT_MODE_OFF
 import androidx.media3.common.Player.STATE_ENDED
 import androidx.media3.common.Timeline
-import androidx.media3.database.StandaloneDatabaseProvider
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
-import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.jay.glossy.constants.SleepTimerCustomDaysKey
 import com.jay.glossy.constants.SleepTimerDayTimesKey
 import com.jay.glossy.constants.SleepTimerDefaultKey
@@ -34,6 +28,7 @@ import com.jay.glossy.constants.SleepTimerEndTimeKey
 import com.jay.glossy.constants.SleepTimerRepeatKey
 import com.jay.glossy.constants.SleepTimerStartTimeKey
 import com.jay.glossy.constants.EnableCanvasKey
+import com.jay.glossy.constants.MaxCanvasCacheSizeKey
 import com.jay.glossy.db.MusicDatabase
 import com.jay.glossy.extensions.currentMetadata
 import com.jay.glossy.extensions.getCurrentQueueIndex
@@ -55,6 +50,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -64,29 +60,30 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
-object CanvasUrlCache {
-    private val cache = mutableMapOf<String, String>()
+// EXACT M3-PLAY STYLE CANVAS URL CACHE (0 MB Storage) 
+object CanvasArtworkPlaybackCache {
+    private var maxItems = 256
+    private val cache = object : java.util.LinkedHashMap<String, String>(0, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
+            return size > maxItems
+        }
+    }
+    fun setMaxSize(size: Int) {
+        maxItems = size
+        if (size == 0) clear()
+    }
+    fun size(): Int = cache.size
     fun get(key: String): String? = cache[key]
-    fun put(key: String, url: String) { cache[key] = url }
+    fun put(key: String, url: String) { if (maxItems > 0) cache[key] = url }
+    fun clear() { cache.clear() }
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 object CanvasPlayerCache {
     private var exoPlayer: ExoPlayer? = null
     private var currentUrl: String? = null
-    private var simpleCache: SimpleCache? = null
-    private var currentMaxCacheSize: Long = 0L
 
-    fun getPlayer(context: Context, url: String, maxCacheSizeMb: Int): ExoPlayer {
-        val maxCacheBytes = maxCacheSizeMb * 1024 * 1024L
-        if (simpleCache == null || currentMaxCacheSize != maxCacheBytes) {
-            simpleCache?.release()
-            val cacheDir = File(context.cacheDir, "canvas_video_cache")
-            val evictor = LeastRecentlyUsedCacheEvictor(maxCacheBytes)
-            simpleCache = SimpleCache(cacheDir, evictor, StandaloneDatabaseProvider(context))
-            currentMaxCacheSize = maxCacheBytes
-        }
-
+    fun getPlayer(context: Context, url: String): ExoPlayer {
         if (exoPlayer == null) {
             exoPlayer = ExoPlayer.Builder(context.applicationContext).build().apply {
                 setAudioAttributes(
@@ -104,30 +101,16 @@ object CanvasPlayerCache {
         
         if (url != currentUrl) {
             currentUrl = url
-            
-            val dataSourceFactory = DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)
-            val cacheDataSourceFactory = CacheDataSource.Factory()
-                .setCache(simpleCache!!)
-                .setUpstreamDataSourceFactory(dataSourceFactory)
-                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-
             val mimeType = if (url.lowercase().contains("mp4")) MimeTypes.VIDEO_MP4 else MimeTypes.APPLICATION_M3U8
-            val mediaItem = MediaItem.Builder().setUri(url).setMimeType(mimeType).build()
-            
-            val mediaSource = DefaultMediaSourceFactory(cacheDataSourceFactory).createMediaSource(mediaItem)
-            
-            exoPlayer?.setMediaSource(mediaSource)
+            exoPlayer?.setMediaItem(MediaItem.Builder().setUri(url).setMimeType(mimeType).build())
             exoPlayer?.prepare()
         }
         return exoPlayer!!
     }
 
-    fun clearCache(context: Context) {
+    fun clearOldHeavyCache(context: Context) {
         val cacheDir = File(context.cacheDir, "canvas_video_cache")
         if (cacheDir.exists()) cacheDir.deleteRecursively()
-        simpleCache?.release()
-        simpleCache = null
-        currentMaxCacheSize = 0L
     }
 
     fun release() {
@@ -159,6 +142,11 @@ class PlayerConnection(
             context.dataStore.data.map { it[EnableCanvasKey] ?: true }.collect {
                 isCanvasEnabled.value = it
                 if (!it) currentCanvasUrl.value = null
+            }
+        }
+        scope.launch {
+            context.dataStore.data.map { it[MaxCanvasCacheSizeKey] ?: 256 }.collect {
+                CanvasArtworkPlaybackCache.setMaxSize(it)
             }
         }
     }
@@ -208,11 +196,9 @@ class PlayerConnection(
                     initialPlayer.playWhenReady && initialPlayer.playbackState != STATE_ENDED,
                 )
             } else {
-                Timber.tag(TAG).w("Player not ready during construction; using safe defaults")
                 Triple(Player.STATE_IDLE, false, false)
             }
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Error during PlayerConnection initialization, using defaults")
             Triple(Player.STATE_IDLE, false, false)
         }
 
@@ -472,18 +458,20 @@ class PlayerConnection(
 
         if (currentItem != null) {
             val mediaId = currentItem.mediaId
-            val cachedUrl = CanvasUrlCache.get(mediaId)
+            val cachedUrl = CanvasArtworkPlaybackCache.get(mediaId)
             currentCanvasUrl.value = cachedUrl 
         } else {
             currentCanvasUrl.value = null
         }
 
         scope.launch(Dispatchers.IO) {
-            if (currentItem != null && CanvasUrlCache.get(currentItem.mediaId) == null) {
+            if (currentItem != null && CanvasArtworkPlaybackCache.get(currentItem.mediaId) == null) {
                 val url = fetchCanvasUrl(currentItem)
-                currentCanvasUrl.value = url
+                if (getPlayerOrNull()?.currentMediaItem?.mediaId == currentItem.mediaId) {
+                    currentCanvasUrl.value = url
+                }
             }
-            if (nextItem != null) {
+            if (nextItem != null && CanvasArtworkPlaybackCache.get(nextItem.mediaId) == null) {
                 fetchCanvasUrl(nextItem)
             }
         }
@@ -491,12 +479,21 @@ class PlayerConnection(
 
     private suspend fun fetchCanvasUrl(item: MediaItem): String? {
         val mediaId = item.mediaId
-        val cachedUrl = CanvasUrlCache.get(mediaId)
+        val cachedUrl = CanvasArtworkPlaybackCache.get(mediaId)
         if (cachedUrl != null) return cachedUrl
 
-        val titleRaw = item.mediaMetadata.title?.toString() ?: ""
-        val artistRaw = item.mediaMetadata.artist?.toString() ?: ""
-        val albumRaw = item.mediaMetadata.albumTitle?.toString() ?: ""
+        var titleRaw = item.mediaMetadata.title?.toString() ?: ""
+        var artistRaw = item.mediaMetadata.artist?.toString() ?: ""
+        var albumRaw = item.mediaMetadata.albumTitle?.toString() ?: ""
+
+        if (titleRaw.isBlank() || artistRaw.isBlank()) {
+            val dbSong = database.song(mediaId).firstOrNull()
+            if (dbSong != null) {
+                titleRaw = dbSong.song.title
+                artistRaw = dbSong.artists.joinToString { it.name }
+                albumRaw = dbSong.album?.title ?: ""
+            }
+        }
 
         val cleanTitle = normalizeCanvasSongTitle(titleRaw)
         val cleanArtist = normalizeCanvasArtistName(artistRaw)
@@ -514,7 +511,7 @@ class PlayerConnection(
                 videoUrl = songCanvas?.preferredAnimationUrl
             }
             if (videoUrl != null) {
-                CanvasUrlCache.put(mediaId, videoUrl) 
+                CanvasArtworkPlaybackCache.put(mediaId, videoUrl) 
             }
             videoUrl
         } catch (e: Exception) {
