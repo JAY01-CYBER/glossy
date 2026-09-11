@@ -60,6 +60,7 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
+
 object CanvasArtworkPlaybackCache {
     private var maxItems = 256
     private val cache = object : java.util.LinkedHashMap<String, String>(0, 0.75f, true) {
@@ -411,22 +412,6 @@ class PlayerConnection(
         }
     }
 
-    private fun parseDayTimes(raw: String): Map<Int, Pair<String, String>> {
-        if (raw.isBlank()) return emptyMap()
-        return raw.split(";").mapNotNull { entry ->
-            val parts = entry.split("=")
-            if (parts.size != 2) return@mapNotNull null
-            val dayIndex = parts[0].toIntOrNull() ?: return@mapNotNull null
-            val times = parts[1].split("-")
-            if (times.size != 2) return@mapNotNull null
-            dayIndex to (times[0] to times[1])
-        }.toMap()
-    }
-
-    private fun checkAndStartAutomaticSleepTimer(): Boolean {
-        return false 
-    }
-
     override fun onPlaybackStateChanged(state: Int) {
         playbackState.value = state
         error.value = player.playerError
@@ -451,40 +436,53 @@ class PlayerConnection(
             return
         }
 
+        // We fetch current and next items using the Main Thread, but we don't hold ExoPlayer instance
         val currentItem = getPlayerOrNull()?.currentMediaItem
         val nextIndex = getPlayerOrNull()?.nextMediaItemIndex ?: C.INDEX_UNSET
         val nextItem = if (nextIndex != C.INDEX_UNSET) getPlayerOrNull()?.getMediaItemAt(nextIndex) else null
 
-        if (currentItem != null) {
-            val mediaId = currentItem.mediaId
-            val cachedUrl = CanvasArtworkPlaybackCache.get(mediaId)
+        // Safe extraction of values to pass into the Coroutine
+        val currentMediaId = currentItem?.mediaId
+        val nextMediaId = nextItem?.mediaId
+        
+        val currentTitleRaw = currentItem?.mediaMetadata?.title?.toString() ?: ""
+        val currentArtistRaw = currentItem?.mediaMetadata?.artist?.toString() ?: ""
+        val currentAlbumRaw = currentItem?.mediaMetadata?.albumTitle?.toString() ?: ""
+
+        val nextTitleRaw = nextItem?.mediaMetadata?.title?.toString() ?: ""
+        val nextArtistRaw = nextItem?.mediaMetadata?.artist?.toString() ?: ""
+        val nextAlbumRaw = nextItem?.mediaMetadata?.albumTitle?.toString() ?: ""
+
+        if (currentMediaId != null) {
+            val cachedUrl = CanvasArtworkPlaybackCache.get(currentMediaId)
             currentCanvasUrl.value = cachedUrl 
         } else {
             currentCanvasUrl.value = null
         }
 
+        // Run network and database calls on the background IO thread safely
         scope.launch(Dispatchers.IO) {
-            if (currentItem != null && CanvasArtworkPlaybackCache.get(currentItem.mediaId) == null) {
-                val url = fetchCanvasUrl(currentItem)
-                // 🚀 FIXED: Checking via StateFlow instead of ExoPlayer on IO thread 🚀
-                if (mediaMetadata.value?.id == currentItem.mediaId) {
+            if (currentMediaId != null && CanvasArtworkPlaybackCache.get(currentMediaId) == null) {
+                val url = fetchCanvasUrl(currentMediaId, currentTitleRaw, currentArtistRaw, currentAlbumRaw)
+                
+                // Thread-safe validation using mediaMetadata.value (StateFlow) instead of ExoPlayer!
+                if (mediaMetadata.value?.id == currentMediaId) {
                     currentCanvasUrl.value = url
                 }
             }
-            if (nextItem != null && CanvasArtworkPlaybackCache.get(nextItem.mediaId) == null) {
-                fetchCanvasUrl(nextItem)
+            if (nextMediaId != null && CanvasArtworkPlaybackCache.get(nextMediaId) == null) {
+                fetchCanvasUrl(nextMediaId, nextTitleRaw, nextArtistRaw, nextAlbumRaw)
             }
         }
     }
 
-    private suspend fun fetchCanvasUrl(item: MediaItem): String? {
-        val mediaId = item.mediaId
+    private suspend fun fetchCanvasUrl(mediaId: String, initialTitle: String, initialArtist: String, initialAlbum: String): String? {
         val cachedUrl = CanvasArtworkPlaybackCache.get(mediaId)
         if (cachedUrl != null) return cachedUrl
 
-        var titleRaw = item.mediaMetadata.title?.toString() ?: ""
-        var artistRaw = item.mediaMetadata.artist?.toString() ?: ""
-        var albumRaw = item.mediaMetadata.albumTitle?.toString() ?: ""
+        var titleRaw = initialTitle
+        var artistRaw = initialArtist
+        var albumRaw = initialAlbum
 
         if (titleRaw.isBlank() || artistRaw.isBlank()) {
             val dbSong = database.song(mediaId).firstOrNull()
